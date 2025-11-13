@@ -1,9 +1,12 @@
 #![allow(irrefutable_let_patterns)]
 
 use blade_graphics as gpu;
+use std::{mem, ptr};
 
-#[derive(blade_macros::ShaderData)]
-struct DrawData {}
+#[derive(blade_macros::Vertex)]
+struct TriangleVertex {
+    pos: [f32; 2],
+}
 
 struct Example {
     command_encoder: gpu::CommandEncoder,
@@ -12,6 +15,17 @@ struct Example {
     surface: gpu::Surface,
     pipeline: gpu::RenderPipeline,
     window_size: winit::dpi::PhysicalSize<u32>,
+    vertex_buf: gpu::BufferPiece,
+    /*
+    // TODO: stores offset, but no length. Why?
+    // This is a design decision to understadn
+        #[derive(Clone, Copy, Debug)]
+    pub struct BufferPiece {
+        pub buffer: Buffer,
+        pub offset: u64,
+    }
+
+        */
 }
 
 impl Example {
@@ -34,7 +48,7 @@ impl Example {
         }
     }
 
-    fn new(window: &winit::window::Window) -> Self {
+    fn init(window: &winit::window::Window) -> Self {
         let window_size = window.inner_size();
         let context = unsafe {
             gpu::Context::init(gpu::ContextDesc {
@@ -60,17 +74,39 @@ impl Example {
 
         let source = std::fs::read_to_string("src/shaders/triangle.wgsl").unwrap();
         let shader = context.create_shader(gpu::ShaderDesc { source: &source });
-        let draw_layout = <DrawData as gpu::ShaderData>::layout();
+
+        let vertices = [
+            TriangleVertex { pos: [0.0, 1.0] },
+            TriangleVertex { pos: [-1.0, -1.0] },
+            TriangleVertex { pos: [1.0, -1.0] },
+        ];
+        let vertex_buf = context.create_buffer(gpu::BufferDesc {
+            name: "vertex",
+            size: (vertices.len() * mem::size_of::<TriangleVertex>()) as u64,
+            memory: gpu::Memory::Shared,
+        });
+        unsafe {
+            ptr::copy_nonoverlapping(
+                vertices.as_ptr(),
+                vertex_buf.data() as *mut TriangleVertex,
+                vertices.len(),
+            );
+        }
+        // TODO: What does this do
+        context.sync_buffer(vertex_buf);
 
         let pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
             name: "main",
-            data_layouts: &[&draw_layout],
+            data_layouts: &[],
             primitive: gpu::PrimitiveState {
                 topology: gpu::PrimitiveTopology::TriangleStrip,
                 ..Default::default()
             },
             vertex: shader.at("vs_main"),
-            vertex_fetches: &[],
+            vertex_fetches: &[gpu::VertexFetchState {
+                layout: &<TriangleVertex as gpu::Vertex>::layout(),
+                instanced: false,
+            }],
             fragment: Some(shader.at("fs_main")),
             color_targets: &[surface.info().format.into()],
             depth_stencil: None,
@@ -84,6 +120,7 @@ impl Example {
             surface,
             pipeline,
             window_size,
+            vertex_buf: vertex_buf.into(),
         }
     }
 
@@ -101,6 +138,7 @@ impl Example {
 
         let frame = self.surface.acquire_frame();
 
+        // TODO: this is a no op. why
         self.command_encoder.init_texture(frame.texture());
 
         if let mut pass = self.command_encoder.render(
@@ -114,10 +152,9 @@ impl Example {
                 depth_stencil: None,
             },
         ) {
-            if let mut pc = pass.with(&self.pipeline) {
-                // first vertex, vertex count, first index, index count
-                pc.draw(0, 3, 0, 1);
-            }
+            let mut rc = pass.with(&self.pipeline);
+            rc.bind_vertex(0, self.vertex_buf);
+            rc.draw(0, 3, 0, 1);
         }
         self.command_encoder.present(frame);
 
@@ -140,7 +177,7 @@ fn main() {
 
     let window = event_loop.create_window(window_attributes).unwrap();
 
-    let mut example = Example::new(&window);
+    let mut example = Example::init(&window);
 
     event_loop
         .run(|event, target| {
