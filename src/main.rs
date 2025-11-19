@@ -175,10 +175,12 @@ fn main() {
     let window_attributes =
         winit::window::Window::default_attributes().with_title("blade triangle");
 
+    #[allow(deprecated)]
     let window = event_loop.create_window(window_attributes).unwrap();
 
     let mut example = Example::init(&window);
 
+    #[allow(deprecated)]
     event_loop
         .run(|event, target| {
             target.set_control_flow(winit::event_loop::ControlFlow::Poll);
