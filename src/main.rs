@@ -1,11 +1,32 @@
 #![allow(irrefutable_let_patterns)]
 
 use blade_graphics as gpu;
-use std::{mem, ptr};
+use bytemuck::{Pod, Zeroable};
+use std::{mem, path, ptr};
+
+use tobj::Material;
+use tobj::Model;
 
 #[derive(blade_macros::Vertex)]
 struct TriangleVertex {
     pos: [f32; 2],
+}
+
+/*
+ * A handle referencing a mesh in a MeshPool
+ */
+#[derive(Clone, Copy)]
+struct MeshHandle {
+    index_first: u32,
+    index_count: u32,
+    base_vertex: i32,
+}
+
+#[derive(blade_macros::ShaderData)]
+struct Params {
+    color: [f32; 4],
+    // texture_view: gpu::TextureView,
+    // texture_sampler: gpu::Sampler,
 }
 
 struct Example {
@@ -113,6 +134,16 @@ impl Example {
             multisample_state: Default::default(),
         });
 
+        //let (models, _materials) = load_obj(path::Path::new("src/assets/bunny.obj")).unwrap();
+
+        //let indices_u16: Vec<u16> = models[0].mesh.indices.iter().map(|&i| i as u16).collect();
+
+        // let tmp_mesh_handle = MeshHandle {
+        //     index_first: 0,
+        //     index_count: indices_u16.len() as u32,
+        //     base_vertex: 0,
+        // };
+
         Self {
             command_encoder,
             prev_sync_point: Some(sync_point),
@@ -153,6 +184,12 @@ impl Example {
             },
         ) {
             let mut rc = pass.with(&self.pipeline);
+            rc.bind(
+                0,
+                &Params {
+                    color: [0.2, 1.0, 0.44, 0.35],
+                },
+            );
             rc.bind_vertex(0, self.vertex_buf);
             rc.draw(0, 3, 0, 1);
         }
@@ -226,4 +263,18 @@ fn main() {
         .unwrap();
 
     example.destroy();
+}
+
+fn load_obj(filepath: &path::Path) -> Result<(Vec<Model>, Vec<Material>), tobj::LoadError> {
+    let (models, _materials) = tobj::load_obj(
+        filepath,
+        &tobj::LoadOptions {
+            single_index: true,
+            triangulate: true,
+            ..Default::default()
+        },
+    )?;
+
+    let materials = _materials?;
+    Ok((models, materials))
 }
