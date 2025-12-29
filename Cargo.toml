@@ -4,9 +4,67 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-blade-graphics = "0.7.0"
-blade-macros = "0.3.0"
 bytemuck = "1.24.0"
 env_logger = "0.11.8"
+glam = "0.30.9"
 tobj = "4.0.3"
-winit = "0.30.12"
+
+# apple
+objc2 = "0.6.3"
+
+
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+  "std",
+  "NSString",
+  "NSDate",
+  "NSNotification",
+  "NSGeometry",
+] }
+
+# macOS UI (NSApplication, NSWindow)
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+  "std",
+  "NSApplication",
+  "NSGraphics",
+  "NSMenu",
+  "NSMenuItem",
+  "NSResponder",
+  "NSRunningApplication",
+  "NSView",
+  "NSViewController",
+  "NSWindow",
+  "NSWindowController",
+] }
+
+# Metal + MetalKit (MTKView)
+objc2-metal = { version = "0.3.2", default-features = false, features = [
+  "std",
+  "objc2-core-foundation",
+  "MTLDevice",
+  "MTLBuffer",
+  "MTLArgument",
+  "MTLCommandQueue",
+  "MTLCommandBuffer",
+  "MTLCommandEncoder",
+  "MTLRenderPipeline",
+  "MTLRenderCommandEncoder",
+  "MTLRenderPass",
+  "MTLLibrary",
+  "MTLPixelFormat",
+  "MTLDrawable",
+  "MTLTypes",
+  "MTLAccelerationStructureTypes",
+  "MTLVertexDescriptor",
+  "MTLDepthStencil",
+] }
+
+objc2-metal-kit = { version = "0.3.2", default-features = false, features = [
+  "std",
+  "objc2-app-kit",
+  "objc2-quartz-core",
+  "MTKView",
+] }
+
+# MetalKit pulls some QuartzCore types in practice.
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = [] }
+

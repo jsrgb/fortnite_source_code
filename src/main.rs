@@ -1,280 +1,421 @@
-#![allow(irrefutable_let_patterns)]
+#![deny(unsafe_op_in_unsafe_fn)]
 
-use blade_graphics as gpu;
-use bytemuck::{Pod, Zeroable};
-use std::{mem, path, ptr};
+use objc2::MainThreadOnly;
+use std::ffi::c_void;
+use std::ptr::NonNull;
 
-use tobj::Material;
-use tobj::Model;
+use objc2::DefinedClass;
 
-#[derive(blade_macros::Vertex)]
-struct TriangleVertex {
-    pos: [f32; 2],
+use std::cell::RefCell;
+
+use objc2::rc::Retained;
+use objc2::runtime::ProtocolObject;
+use objc2::{define_class, msg_send, MainThreadMarker};
+
+use objc2_foundation::{
+    ns_string, NSDate, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize,
+    NSUInteger, NSURL,
+};
+
+use objc2_app_kit::{
+    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSBackingStoreType,
+    NSWindow, NSWindowStyleMask,
+};
+
+use objc2_metal::{
+    MTLBuffer, MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
+    MTLCompareFunction, MTLCreateSystemDefaultDevice, MTLDepthStencilDescriptor,
+    MTLDepthStencilState, MTLDevice, MTLIndexType, MTLLibrary, MTLPackedFloat3, MTLPixelFormat,
+    MTLPrimitiveType, MTLRenderCommandEncoder, MTLRenderPipelineDescriptor, MTLRenderPipelineState,
+    MTLResourceOptions, MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction,
+};
+
+use objc2_metal_kit::{MTKView, MTKViewDelegate};
+
+#[derive(Copy, Clone)]
+#[repr(C)]
+struct Uniforms {
+    time: f32,
 }
 
-/*
- * A handle referencing a mesh in a MeshPool
- */
-#[derive(Clone, Copy)]
-struct MeshHandle {
-    index_first: u32,
-    index_count: u32,
-    base_vertex: i32,
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct CubeVertex {
+    position: MTLPackedFloat3,
+    color: MTLPackedFloat3,
 }
 
-#[derive(blade_macros::ShaderData)]
-struct Params {
-    color: [f32; 4],
-    // texture_view: gpu::TextureView,
-    // texture_sampler: gpu::Sampler,
+// FIXME: remove
+const CUBE_VERTS: [CubeVertex; 8] = [
+    // Front face
+    CubeVertex {
+        position: MTLPackedFloat3 {
+            x: -0.5,
+            y: -0.5,
+            z: 0.5,
+        },
+        color: MTLPackedFloat3 {
+            x: 1.0,
+            y: 0.0,
+            z: 0.0,
+        },
+    },
+    CubeVertex {
+        position: MTLPackedFloat3 {
+            x: 0.5,
+            y: -0.5,
+            z: 0.5,
+        },
+        color: MTLPackedFloat3 {
+            x: 0.0,
+            y: 1.0,
+            z: 0.0,
+        },
+    },
+    CubeVertex {
+        position: MTLPackedFloat3 {
+            x: 0.5,
+            y: 0.5,
+            z: 0.5,
+        },
+        color: MTLPackedFloat3 {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        },
+    },
+    CubeVertex {
+        position: MTLPackedFloat3 {
+            x: -0.5,
+            y: 0.5,
+            z: 0.5,
+        },
+        color: MTLPackedFloat3 {
+            x: 1.0,
+            y: 1.0,
+            z: 0.0,
+        },
+    },
+    // Back face
+    CubeVertex {
+        position: MTLPackedFloat3 {
+            x: -0.5,
+            y: -0.5,
+            z: -0.5,
+        },
+        color: MTLPackedFloat3 {
+            x: 1.0,
+            y: 0.0,
+            z: 1.0,
+        },
+    },
+    CubeVertex {
+        position: MTLPackedFloat3 {
+            x: 0.5,
+            y: -0.5,
+            z: -0.5,
+        },
+        color: MTLPackedFloat3 {
+            x: 0.0,
+            y: 1.0,
+            z: 1.0,
+        },
+    },
+    CubeVertex {
+        position: MTLPackedFloat3 {
+            x: 0.5,
+            y: 0.5,
+            z: -0.5,
+        },
+        color: MTLPackedFloat3 {
+            x: 1.0,
+            y: 1.0,
+            z: 1.0,
+        },
+    },
+    CubeVertex {
+        position: MTLPackedFloat3 {
+            x: -0.5,
+            y: 0.5,
+            z: -0.5,
+        },
+        color: MTLPackedFloat3 {
+            x: 0.2,
+            y: 0.2,
+            z: 0.2,
+        },
+    },
+];
+
+const CUBE_INDICES: [u16; 36] = [
+    // Front
+    0, 1, 2, 2, 3, 0, // Right
+    1, 5, 6, 6, 2, 1, // Back
+    5, 4, 7, 7, 6, 5, // Left
+    4, 0, 3, 3, 7, 4, // Top
+    3, 2, 6, 6, 7, 3, // Bottom
+    4, 5, 1, 1, 0, 4,
+];
+
+struct GpuDevice {
+    device: Retained<ProtocolObject<dyn MTLDevice>>,
+    command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
 }
 
-struct Example {
-    command_encoder: gpu::CommandEncoder,
-    prev_sync_point: Option<gpu::SyncPoint>,
-    context: gpu::Context,
-    surface: gpu::Surface,
-    pipeline: gpu::RenderPipeline,
-    window_size: winit::dpi::PhysicalSize<u32>,
-    vertex_buf: gpu::BufferPiece,
-    /*
-    // TODO: stores offset, but no length. Why?
-    // This is a design decision to understadn
-        #[derive(Clone, Copy, Debug)]
-    pub struct BufferPiece {
-        pub buffer: Buffer,
-        pub offset: u64,
-    }
-
-        */
+struct AppState {
+    start_date: Retained<NSDate>,
+    device: GpuDevice,
+    pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    depth_stencil_state: Retained<ProtocolObject<dyn MTLDepthStencilState>>, // FIXME: move
+    vbuf: Retained<ProtocolObject<dyn MTLBuffer>>,
+    ibuf: Retained<ProtocolObject<dyn MTLBuffer>>,
 }
 
-impl Example {
-    fn resize(&mut self, size: winit::dpi::PhysicalSize<u32>) {
-        self.window_size = size;
-        let config = Self::make_surface_config(size);
-        self.context.reconfigure_surface(&mut self.surface, config);
-    }
+struct Ivars {
+    state: RefCell<Option<AppState>>,
+}
 
-    fn make_surface_config(size: winit::dpi::PhysicalSize<u32>) -> gpu::SurfaceConfig {
-        gpu::SurfaceConfig {
-            size: gpu::Extent {
-                width: size.width,
-                height: size.height,
-                depth: 1,
-            },
-            usage: gpu::TextureUsage::TARGET,
-            display_sync: gpu::DisplaySync::Block,
-            ..Default::default()
-        }
-    }
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[thread_kind = objc2::MainThreadOnly]
+    #[ivars = Ivars]
+    struct Delegate;
 
-    fn init(window: &winit::window::Window) -> Self {
-        let window_size = window.inner_size();
-        let context = unsafe {
-            gpu::Context::init(gpu::ContextDesc {
-                presentation: true,
-                validation: cfg!(debug_assertions),
-                timing: true,
-                capture: false,
+    unsafe impl NSObjectProtocol for Delegate {}
 
-                ..Default::default()
-            })
-            .unwrap()
-        };
-        let surface = context
-            .create_surface_configured(window, Self::make_surface_config(window_size))
-            .unwrap();
+    unsafe impl NSApplicationDelegate for Delegate {
+        #[unsafe(method(applicationDidFinishLaunching:))]
+        // https://developer.apple.com/documentation/appkit/nsapplicationdelegate/applicationdidfinishlaunching(_:)?language=objc
+        unsafe fn init(&self, _notification: &NSNotification) {
+            // FIXME: innacurate fn name i think
+            let mtm = MainThreadMarker::new().unwrap();
 
-        let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
-            name: "main",
-            buffer_count: 2,
-        });
-        command_encoder.start();
-        let sync_point = context.submit(&mut command_encoder);
+            let window = {
+                let content_rect = NSRect::new(NSPoint::new(0., 0.), NSSize::new(768., 768.));
+                let style = NSWindowStyleMask::Closable
+                    | NSWindowStyleMask::Resizable
+                    | NSWindowStyleMask::Titled;
 
-        let source = std::fs::read_to_string("src/shaders/triangle.wgsl").unwrap();
-        let shader = context.create_shader(gpu::ShaderDesc { source: &source });
+                unsafe {
+                    NSWindow::initWithContentRect_styleMask_backing_defer(
+                        NSWindow::alloc(mtm),
+                        content_rect,
+                        style,
+                        NSBackingStoreType::Buffered,
+                        false,
+                    )
+                }
+            };
 
-        let vertices = [
-            TriangleVertex { pos: [0.0, 1.0] },
-            TriangleVertex { pos: [-1.0, -1.0] },
-            TriangleVertex { pos: [1.0, -1.0] },
-        ];
-        let vertex_buf = context.create_buffer(gpu::BufferDesc {
-            name: "vertex",
-            size: (vertices.len() * mem::size_of::<TriangleVertex>()) as u64,
-            memory: gpu::Memory::Shared,
-        });
-        unsafe {
-            ptr::copy_nonoverlapping(
-                vertices.as_ptr(),
-                vertex_buf.data() as *mut TriangleVertex,
-                vertices.len(),
-            );
-        }
-        // TODO: What does this do
-        context.sync_buffer(vertex_buf);
+            let device = MTLCreateSystemDefaultDevice().expect("No Metal device");
+            let command_queue = device
+                .newCommandQueue()
+                .expect("Failed to create command queue");
 
-        let pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
-            name: "main",
-            data_layouts: &[],
-            primitive: gpu::PrimitiveState {
-                topology: gpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            vertex: shader.at("vs_main"),
-            vertex_fetches: &[gpu::VertexFetchState {
-                layout: &<TriangleVertex as gpu::Vertex>::layout(),
-                instanced: false,
-            }],
-            fragment: Some(shader.at("fs_main")),
-            color_targets: &[surface.info().format.into()],
-            depth_stencil: None,
-            multisample_state: Default::default(),
-        });
+            let view = {
+                let frame_rect = window.frame();
+                let mtk_view = MTKView::initWithFrame(MTKView::alloc(mtm), frame_rect);
+                mtk_view.setDevice(Some(&device));
+                mtk_view.setDepthStencilPixelFormat(MTLPixelFormat::Depth32Float);
 
-        //let (models, _materials) = load_obj(path::Path::new("src/assets/bunny.obj")).unwrap();
+                mtk_view
+            };
 
-        //let indices_u16: Vec<u16> = models[0].mesh.indices.iter().map(|&i| i as u16).collect();
+            let pipeline_descriptor = MTLRenderPipelineDescriptor::new();
+            unsafe {
+                pipeline_descriptor
+                    .colorAttachments()
+                    .objectAtIndexedSubscript(0)
+                    .setPixelFormat(view.colorPixelFormat());
+            }
 
-        // let tmp_mesh_handle = MeshHandle {
-        //     index_first: 0,
-        //     index_count: indices_u16.len() as u32,
-        //     base_vertex: 0,
-        // };
+            // FIXME: absolute path
+            let url = { NSURL::fileURLWithPath(ns_string!("./src/cube.metallib")) };
+            let library = device
+                .newLibraryWithURL_error(&url)
+                .expect("Failed to compile shaders");
 
-        Self {
-            command_encoder,
-            prev_sync_point: Some(sync_point),
-            context,
-            surface,
-            pipeline,
-            window_size,
-            vertex_buf: vertex_buf.into(),
-        }
-    }
+            let vertex_fn = library.newFunctionWithName(ns_string!("vertex_main"));
+            let frag_fn = library.newFunctionWithName(ns_string!("fragment_main"));
 
-    fn destroy(&mut self) {
-        if let Some(sp) = self.prev_sync_point.take() {
-            self.context.wait_for(&sp, !0);
-        }
-        self.context
-            .destroy_command_encoder(&mut self.command_encoder);
-        self.context.destroy_surface(&mut self.surface);
-    }
+            pipeline_descriptor.setVertexFunction(vertex_fn.as_deref());
+            pipeline_descriptor.setFragmentFunction(frag_fn.as_deref());
 
-    fn render(&mut self) {
-        self.command_encoder.start();
+            // Add depth stencil attachment
+            pipeline_descriptor.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
 
-        let frame = self.surface.acquire_frame();
+            // A MTLVertexDescriptor has attributes and layouts
+            let vertex_descriptor = MTLVertexDescriptor::new();
 
-        // TODO: this is a no op. why
-        self.command_encoder.init_texture(frame.texture());
+            // Attribute 0: position (float3) at offset 0 in buffer(1)
+            unsafe {
+                let a0 = vertex_descriptor.attributes().objectAtIndexedSubscript(0);
+                a0.setFormat(MTLVertexFormat::Float3);
+                a0.setOffset(0);
+                a0.setBufferIndex(1);
+            }
 
-        if let mut pass = self.command_encoder.render(
-            "triangle",
-            gpu::RenderTargetSet {
-                colors: &[gpu::RenderTarget {
-                    view: frame.texture_view(),
-                    init_op: gpu::InitOp::Clear(gpu::TextureColor::OpaqueBlack),
-                    finish_op: gpu::FinishOp::Store, // TODO: What
-                }],
-                depth_stencil: None,
-            },
-        ) {
-            let mut rc = pass.with(&self.pipeline);
-            rc.bind(
-                0,
-                &Params {
-                    color: [0.2, 1.0, 0.44, 0.35],
+            // Attribute 1: color (float3) at offset 12 in buffer(1)
+            unsafe {
+                let a1 = vertex_descriptor.attributes().objectAtIndexedSubscript(1);
+                a1.setFormat(MTLVertexFormat::Float3);
+                a1.setOffset(12);
+                a1.setBufferIndex(1);
+            }
+
+            // layouts describe how to fetch (stride,offset)
+            // Layout for buffer(1): stride = 24 bytes
+            unsafe {
+                let layout = vertex_descriptor.layouts().objectAtIndexedSubscript(1);
+                layout.setStride(std::mem::size_of::<CubeVertex>() as NSUInteger); // 24
+                layout.setStepFunction(MTLVertexStepFunction::PerVertex);
+                layout.setStepRate(1);
+            }
+
+            // Attached vertex spec to pipeline
+            pipeline_descriptor.setVertexDescriptor(Some(&vertex_descriptor));
+
+            let pipeline_state = device
+                .newRenderPipelineStateWithDescriptor_error(&pipeline_descriptor)
+                .expect("Failed to create pipeline state");
+
+            view.setDelegate(Some(ProtocolObject::from_ref(self)));
+            view.setClearColor(MTLClearColor {
+                red: 0.0,
+                green: 0.5,
+                blue: 1.0,
+                alpha: 1.0,
+            });
+
+            window.setContentView(Some(&view));
+            window.center();
+            window.setTitle(ns_string!("triangle"));
+            window.makeKeyAndOrderFront(None);
+
+            // Depth stencil
+            let depth_stencil_descriptor = MTLDepthStencilDescriptor::new();
+            depth_stencil_descriptor.setDepthCompareFunction(MTLCompareFunction::Less);
+            depth_stencil_descriptor.setDepthWriteEnabled(true);
+            let depth_stencil_state = device
+                .newDepthStencilStateWithDescriptor(&depth_stencil_descriptor)
+                .expect("Failed to create depth stencil state");
+
+            // FIXME:
+            let vbytes = (std::mem::size_of::<CubeVertex>() * CUBE_VERTS.len()) as NSUInteger;
+            let ibytes = (std::mem::size_of::<u16>() * CUBE_INDICES.len()) as NSUInteger;
+
+            let vptr = NonNull::new(CUBE_VERTS.as_ptr() as *mut c_void).unwrap();
+            let iptr = NonNull::new(CUBE_INDICES.as_ptr() as *mut c_void).unwrap();
+
+            // cpy to metal buffer
+            let vbuf = unsafe {
+                device.newBufferWithBytes_length_options(vptr, vbytes, MTLResourceOptions::empty())
+            }
+            .expect("failed to create vertex buffer");
+
+            let ibuf = unsafe {
+                device.newBufferWithBytes_length_options(iptr, ibytes, MTLResourceOptions::empty())
+            }
+            .expect("failed to create index buffer");
+
+            *self.ivars().state.borrow_mut() = Some(AppState {
+                start_date: NSDate::now(),
+                device: GpuDevice {
+                    device,
+                    command_queue,
                 },
-            );
-            rc.bind_vertex(0, self.vertex_buf);
-            rc.draw(0, 3, 0, 1);
+                vbuf,
+                ibuf,
+                depth_stencil_state,
+                pipeline: pipeline_state,
+            });
         }
-        self.command_encoder.present(frame);
 
-        // TODO: what happens if i remove this
-        let sync_point = self.context.submit(&mut self.command_encoder);
-
-        if let Some(prev) = self.prev_sync_point.take() {
-            self.context.wait_for(&prev, !0);
+        #[unsafe(method(applicationShouldTerminateAfterLastWindowClosed:))]
+        // https://developer.apple.com/documentation/appkit/nsapplicationdelegate/applicationshouldterminateafterlastwindowclosed(_:)?language=objc
+        fn on_window_close(&self, _: &NSApplication) -> bool {
+            true
         }
-        self.prev_sync_point = Some(sync_point);
     }
-}
+
+    unsafe impl MTKViewDelegate for Delegate {
+        #[unsafe(method(drawInMTKView:))]
+        // https://developer.apple.com/documentation/metalkit/mtkview/draw()?language=objc
+        unsafe fn draw(&self, mtk_view: &MTKView) {
+            let borrow = self.ivars().state.borrow();
+            let Some(state) = borrow.as_ref() else {
+                return;
+            };
+
+            let Some(drawable) = mtk_view.currentDrawable() else {
+                return;
+            };
+            let Some(command_buffer) = state.device.command_queue.commandBuffer() else {
+                return;
+            };
+            let Some(pass_desc) = mtk_view.currentRenderPassDescriptor() else {
+                return;
+            };
+            let Some(encoder) = command_buffer.renderCommandEncoderWithDescriptor(&pass_desc)
+            else {
+                return;
+            };
+
+            let uniforms = Uniforms {
+                time: state.start_date.timeIntervalSinceNow() as f32,
+            };
+            let uniforms_ptr = NonNull::from(&uniforms);
+
+            unsafe {
+                encoder.setVertexBytes_length_atIndex(
+                    uniforms_ptr.cast(),
+                    std::mem::size_of_val(&uniforms),
+                    0,
+                );
+            }
+
+            unsafe {
+                encoder.setVertexBuffer_offset_atIndex(Some(&state.vbuf), 0, 1);
+            }
+
+            encoder.setRenderPipelineState(&state.pipeline);
+            encoder.setDepthStencilState(Some(&state.depth_stencil_state));
+            unsafe {
+                encoder.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset(
+                    MTLPrimitiveType::Triangle,
+                    CUBE_INDICES.len() as NSUInteger,
+                    MTLIndexType::UInt16,
+                    &state.ibuf,
+                    0,
+                );
+            }
+            encoder.endEncoding();
+            command_buffer.presentDrawable(ProtocolObject::from_ref(&*drawable));
+            command_buffer.commit();
+        }
+
+        #[unsafe(method(mtkView:drawableSizeWillChange:))]
+        //https://developer.apple.com/documentation/metalkit/mtkviewdelegate/mtkview(_:drawablesizewillchange:)?language=objc
+        unsafe fn update_view_on_resize(&self, _view: &MTKView, _size: NSSize) {}
+    }
+);
 
 fn main() {
-    env_logger::init();
+    let mtm = MainThreadMarker::new().unwrap();
 
-    let event_loop = winit::event_loop::EventLoop::new().unwrap();
-    let window_attributes =
-        winit::window::Window::default_attributes().with_title("blade triangle");
+    let app = NSApplication::sharedApplication(mtm);
 
-    #[allow(deprecated)]
-    let window = event_loop.create_window(window_attributes).unwrap();
+    app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
-    let mut example = Example::init(&window);
+    let delegate: Retained<Delegate> = unsafe {
+        let this = Delegate::alloc(mtm).set_ivars(Ivars {
+            state: RefCell::new(None),
+        });
 
-    #[allow(deprecated)]
-    event_loop
-        .run(|event, target| {
-            target.set_control_flow(winit::event_loop::ControlFlow::Poll);
+        msg_send![super(this), init]
+    };
 
-            match event {
-                winit::event::Event::AboutToWait => {
-                    window.request_redraw();
-                }
+    app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
 
-                winit::event::Event::WindowEvent { event, .. } => match event {
-                    winit::event::WindowEvent::Resized(size) => {
-                        example.resize(size);
-                    }
-                    winit::event::WindowEvent::KeyboardInput {
-                        event:
-                            winit::event::KeyEvent {
-                                physical_key: winit::keyboard::PhysicalKey::Code(key_code),
-                                state: winit::event::ElementState::Pressed,
-                                ..
-                            },
-                        ..
-                    } => match key_code {
-                        winit::keyboard::KeyCode::Escape => {
-                            target.exit();
-                        }
-                        _ => {}
-                    },
-
-                    winit::event::WindowEvent::CloseRequested => {
-                        target.exit();
-                    }
-
-                    winit::event::WindowEvent::RedrawRequested => {
-                        example.render();
-                    }
-
-                    _ => {}
-                },
-
-                _ => {}
-            }
-        })
-        .unwrap();
-
-    example.destroy();
-}
-
-fn load_obj(filepath: &path::Path) -> Result<(Vec<Model>, Vec<Material>), tobj::LoadError> {
-    let (models, _materials) = tobj::load_obj(
-        filepath,
-        &tobj::LoadOptions {
-            single_index: true,
-            triangulate: true,
-            ..Default::default()
-        },
-    )?;
-
-    let materials = _materials?;
-    Ok((models, materials))
+    app.run();
 }
