@@ -12,9 +12,11 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{define_class, msg_send, MainThreadMarker};
 
+use glam::{Mat4, Vec2, Vec3, Vec4};
+
 use objc2_foundation::{
-    ns_string, NSDate, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize,
-    NSUInteger, NSURL,
+    ns_string, NSDate, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
+    NSSize, NSUInteger, NSURL,
 };
 
 use objc2_app_kit::{
@@ -36,6 +38,7 @@ use objc2_metal_kit::{MTKView, MTKViewDelegate};
 #[derive(Copy, Clone)]
 #[repr(C)]
 struct Uniforms {
+    view_proj: Mat4,
     time: f32,
 }
 
@@ -45,6 +48,9 @@ struct CubeVertex {
     position: MTLPackedFloat3,
     color: MTLPackedFloat3,
 }
+
+const WINDOW_W: f64 = 800.0;
+const WINDOW_H: f64 = 600.0;
 
 // FIXME: remove
 const CUBE_VERTS: [CubeVertex; 8] = [
@@ -192,7 +198,8 @@ define_class!(
             let mtm = MainThreadMarker::new().unwrap();
 
             let window = {
-                let content_rect = NSRect::new(NSPoint::new(0., 0.), NSSize::new(768., 768.));
+                let content_rect =
+                    NSRect::new(NSPoint::new(0., 0.), NSSize::new(WINDOW_W, WINDOW_H));
                 let style = NSWindowStyleMask::Closable
                     | NSWindowStyleMask::Resizable
                     | NSWindowStyleMask::Titled;
@@ -304,10 +311,6 @@ define_class!(
             // FIXME:
             let vbytes = (std::mem::size_of::<CubeVertex>() * CUBE_VERTS.len()) as NSUInteger;
             let ibytes = (std::mem::size_of::<u16>() * CUBE_INDICES.len()) as NSUInteger;
-
-            let vptr = NonNull::new(CUBE_VERTS.as_ptr() as *mut c_void).unwrap();
-            let iptr = NonNull::new(CUBE_INDICES.as_ptr() as *mut c_void).unwrap();
-
             // create a heap for long lived data,  everything else goes on the stack
             let heap_descriptor = MTLHeapDescriptor::new();
             heap_descriptor.setSize(64 * 1024 * 1024);
@@ -385,7 +388,23 @@ define_class!(
                 return;
             };
 
+            let aspect_ratio = WINDOW_W as f32 / WINDOW_H as f32;
+            let projection = glam::Mat4::perspective_rh(
+                45.0_f32.to_radians(),
+                aspect_ratio,
+                0.025, // near plane
+                500.0, // far plane
+            );
+            let view = Mat4::look_at_rh(
+                Vec3::new(1.0, 2.0, -1.0), // camera pos
+                Vec3::new(0.0, 0.0, 0.0),  // center
+                Vec3::new(0.0, 1.0, 0.0),  // up vector
+            );
+
+            let view_proj = projection * view;
+
             let uniforms = Uniforms {
+                view_proj,
                 time: state.start_date.timeIntervalSinceNow() as f32,
             };
             let uniforms_ptr = NonNull::from(&uniforms);

@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 bytemuck = "1.24.0"
 env_logger = "0.11.8"
-glam = "0.30.9"
+glam = { version = "0.30.9", features = ["bytemuck"] }
 tobj = "4.0.3"
 
 # apple
