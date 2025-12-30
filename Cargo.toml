@@ -48,6 +48,7 @@ objc2-metal = { version = "0.3.2", default-features = false, features = [
   "MTLCommandEncoder",
   "MTLRenderPipeline",
   "MTLRenderCommandEncoder",
+  "MTLResource",
   "MTLRenderPass",
   "MTLLibrary",
   "MTLPixelFormat",
@@ -56,6 +57,7 @@ objc2-metal = { version = "0.3.2", default-features = false, features = [
   "MTLAccelerationStructureTypes",
   "MTLVertexDescriptor",
   "MTLDepthStencil",
+  "MTLHeap",
 ] }
 
 objc2-metal-kit = { version = "0.3.2", default-features = false, features = [

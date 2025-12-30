@@ -23,11 +23,12 @@ use objc2_app_kit::{
 };
 
 use objc2_metal::{
-    MTLBuffer, MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
-    MTLCompareFunction, MTLCreateSystemDefaultDevice, MTLDepthStencilDescriptor,
-    MTLDepthStencilState, MTLDevice, MTLIndexType, MTLLibrary, MTLPackedFloat3, MTLPixelFormat,
-    MTLPrimitiveType, MTLRenderCommandEncoder, MTLRenderPipelineDescriptor, MTLRenderPipelineState,
-    MTLResourceOptions, MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction,
+    MTLBuffer, MTLCPUCacheMode, MTLClearColor, MTLCommandBuffer, MTLCommandEncoder,
+    MTLCommandQueue, MTLCompareFunction, MTLCreateSystemDefaultDevice, MTLDepthStencilDescriptor,
+    MTLDepthStencilState, MTLDevice, MTLHeap, MTLHeapDescriptor, MTLIndexType, MTLLibrary,
+    MTLPackedFloat3, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder,
+    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLResourceOptions, MTLStorageMode,
+    MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction,
 };
 
 use objc2_metal_kit::{MTKView, MTKViewDelegate};
@@ -307,16 +308,39 @@ define_class!(
             let vptr = NonNull::new(CUBE_VERTS.as_ptr() as *mut c_void).unwrap();
             let iptr = NonNull::new(CUBE_INDICES.as_ptr() as *mut c_void).unwrap();
 
-            // cpy to metal buffer
-            let vbuf = unsafe {
-                device.newBufferWithBytes_length_options(vptr, vbytes, MTLResourceOptions::empty())
-            }
-            .expect("failed to create vertex buffer");
+            // create a heap for long lived data,  everything else goes on the stack
+            let heap_descriptor = MTLHeapDescriptor::new();
+            heap_descriptor.setSize(64 * 1024 * 1024);
+            heap_descriptor.setStorageMode(MTLStorageMode::Shared);
+            heap_descriptor.setCpuCacheMode(MTLCPUCacheMode::DefaultCache);
+            let heap = {
+                device
+                    .newHeapWithDescriptor(&heap_descriptor)
+                    .expect("Failed to create heap")
+            };
 
-            let ibuf = unsafe {
-                device.newBufferWithBytes_length_options(iptr, ibytes, MTLResourceOptions::empty())
+            let vbuf = heap
+                .newBufferWithLength_options(vbytes, MTLResourceOptions::StorageModeShared)
+                .expect("Failed to create  buffer");
+            let ibuf = heap
+                .newBufferWithLength_options(ibytes, MTLResourceOptions::StorageModeShared)
+                .expect("Failed to create buffer");
+
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    CUBE_VERTS.as_ptr() as *const u8,
+                    vbuf.contents().as_ptr() as *mut u8,
+                    vbytes as usize,
+                );
             }
-            .expect("failed to create index buffer");
+
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    CUBE_INDICES.as_ptr() as *const u8,
+                    ibuf.contents().as_ptr() as *mut u8,
+                    ibytes as usize,
+                );
+            }
 
             *self.ivars().state.borrow_mut() = Some(AppState {
                 start_date: NSDate::now(),
