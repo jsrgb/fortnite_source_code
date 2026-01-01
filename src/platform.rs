@@ -36,15 +36,15 @@ define_class!(
     unsafe impl NSApplicationDelegate for Delegate {
         #[unsafe(method(applicationDidFinishLaunching:))]
         unsafe fn init(&self, _notification: &NSNotification) {
-            let (state, window, view) = init();
+            let (state, _window, view) = init();
             view.setDelegate(Some(ProtocolObject::from_ref(self)));
             *self.ivars().state.borrow_mut() = Some(state);
 
-            // Add local event monitor for keyboard events
             let event_mask = NSEventMask::KeyDown | NSEventMask::KeyUp;
             let block = RcBlock::new(|event: NonNull<NSEvent>| -> *mut NSEvent {
                 let event_ref = unsafe { event.as_ref() };
                 let keycode = event_ref.keyCode();
+                // https://doc.rust-lang.org/rust-by-example/compatibility/raw_identifiers.html
                 match event_ref.r#type() {
                     NSEventType::KeyDown => {
                         KEYSTATE.lock().unwrap().insert(keycode);
@@ -56,10 +56,8 @@ define_class!(
                 }
                 event.as_ptr()
             });
-            let _monitor = unsafe {
-                NSEvent::addLocalMonitorForEventsMatchingMask_handler(event_mask, &block)
-            };
-            // Note: monitor is leaked intentionally - it needs to live for the app lifetime
+
+            unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(event_mask, &block) };
         }
 
         #[unsafe(method(applicationShouldTerminateAfterLastWindowClosed:))]
