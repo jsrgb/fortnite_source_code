@@ -1,6 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use crate::{frame, init, AppState};
+use std::ptr;
 
 use objc2::{rc::Retained, DefinedClass};
 
@@ -54,7 +55,7 @@ define_class!(
                     }
                     _ => {}
                 }
-                event.as_ptr()
+                ptr::null_mut()
             });
 
             unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(event_mask, &block) };
