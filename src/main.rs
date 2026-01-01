@@ -26,9 +26,9 @@ use objc2_metal::{
     MTLBuffer, MTLCPUCacheMode, MTLClearColor, MTLCommandBuffer, MTLCommandEncoder,
     MTLCommandQueue, MTLCompareFunction, MTLCreateSystemDefaultDevice, MTLDepthStencilDescriptor,
     MTLDepthStencilState, MTLDevice, MTLHeap, MTLHeapDescriptor, MTLIndexType, MTLLibrary,
-    MTLPackedFloat3, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder,
-    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLResourceOptions, MTLStorageMode,
-    MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction,
+    MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder, MTLRenderPipelineDescriptor,
+    MTLRenderPipelineState, MTLResourceOptions, MTLStorageMode, MTLVertexDescriptor,
+    MTLVertexFormat, MTLVertexStepFunction,
 };
 
 use objc2_metal_kit::MTKView;
@@ -40,133 +40,35 @@ struct Uniforms {
     time: f32,
 }
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-struct CubeVertex {
-    position: MTLPackedFloat3,
-    color: MTLPackedFloat3,
-}
-
 struct Mesh {
     vertex_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
-    // FIXME: make many?
     index_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
+    index_count: usize,
+    primitive: MTLPrimitiveType,
+}
+
+impl Mesh {
+    fn draw(&self, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
+        unsafe {
+            encoder.setVertexBuffer_offset_atIndex(Some(&self.vertex_buffer), 0, 1);
+            encoder.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset(
+                self.primitive,
+                self.index_count,
+                MTLIndexType::UInt32,
+                &self.index_buffer,
+                0,
+            );
+        }
+    }
+}
+
+struct Model {
+    mesh: Vec<Mesh>,
+    name: String,
 }
 
 const WINDOW_W: f64 = 800.0;
 const WINDOW_H: f64 = 600.0;
-
-// FIXME: remove
-const CUBE_VERTS: [CubeVertex; 8] = [
-    // Front face
-    CubeVertex {
-        position: MTLPackedFloat3 {
-            x: -0.5,
-            y: -0.5,
-            z: 0.5,
-        },
-        color: MTLPackedFloat3 {
-            x: 1.0,
-            y: 0.0,
-            z: 0.0,
-        },
-    },
-    CubeVertex {
-        position: MTLPackedFloat3 {
-            x: 0.5,
-            y: -0.5,
-            z: 0.5,
-        },
-        color: MTLPackedFloat3 {
-            x: 0.0,
-            y: 1.0,
-            z: 0.0,
-        },
-    },
-    CubeVertex {
-        position: MTLPackedFloat3 {
-            x: 0.5,
-            y: 0.5,
-            z: 0.5,
-        },
-        color: MTLPackedFloat3 {
-            x: 0.0,
-            y: 0.0,
-            z: 1.0,
-        },
-    },
-    CubeVertex {
-        position: MTLPackedFloat3 {
-            x: -0.5,
-            y: 0.5,
-            z: 0.5,
-        },
-        color: MTLPackedFloat3 {
-            x: 1.0,
-            y: 1.0,
-            z: 0.0,
-        },
-    },
-    // Back face
-    CubeVertex {
-        position: MTLPackedFloat3 {
-            x: -0.5,
-            y: -0.5,
-            z: -0.5,
-        },
-        color: MTLPackedFloat3 {
-            x: 1.0,
-            y: 0.0,
-            z: 1.0,
-        },
-    },
-    CubeVertex {
-        position: MTLPackedFloat3 {
-            x: 0.5,
-            y: -0.5,
-            z: -0.5,
-        },
-        color: MTLPackedFloat3 {
-            x: 0.0,
-            y: 1.0,
-            z: 1.0,
-        },
-    },
-    CubeVertex {
-        position: MTLPackedFloat3 {
-            x: 0.5,
-            y: 0.5,
-            z: -0.5,
-        },
-        color: MTLPackedFloat3 {
-            x: 1.0,
-            y: 1.0,
-            z: 1.0,
-        },
-    },
-    CubeVertex {
-        position: MTLPackedFloat3 {
-            x: -0.5,
-            y: 0.5,
-            z: -0.5,
-        },
-        color: MTLPackedFloat3 {
-            x: 0.2,
-            y: 0.2,
-            z: 0.2,
-        },
-    },
-];
-
-const CUBE_INDICES: [u16; 36] = [
-    // Front
-    0, 1, 2, 2, 3, 0, // Right
-    1, 5, 6, 6, 2, 1, // Back
-    5, 4, 7, 7, 6, 5, // Left
-    4, 0, 3, 3, 7, 4, // Top
-    3, 2, 6, 6, 7, 3, // Bottom
-    4, 5, 1, 1, 0, 4,
-];
 
 struct Device {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
@@ -178,7 +80,7 @@ pub struct AppState {
     device: Device,
     pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     depth_stencil_state: Retained<ProtocolObject<dyn MTLDepthStencilState>>, // FIXME: move
-    mesh: Mesh,
+    model: Model,
 }
 
 pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
@@ -248,19 +150,11 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         a0.setBufferIndex(1);
     }
 
-    // Attribute 1: color (float3) at offset 12 in buffer(1)
-    unsafe {
-        let a1 = vertex_descriptor.attributes().objectAtIndexedSubscript(1);
-        a1.setFormat(MTLVertexFormat::Float3);
-        a1.setOffset(12);
-        a1.setBufferIndex(1);
-    }
-
     // layouts describe how to fetch (stride,offset)
     // Layout for buffer(1): stride = 24 bytes
     unsafe {
         let layout = vertex_descriptor.layouts().objectAtIndexedSubscript(1);
-        layout.setStride(std::mem::size_of::<CubeVertex>() as NSUInteger); // 24
+        layout.setStride(std::mem::size_of::<[f32; 3]>() as NSUInteger); // 24
         layout.setStepFunction(MTLVertexStepFunction::PerVertex);
         layout.setStepRate(1);
     }
@@ -292,9 +186,6 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         .newDepthStencilStateWithDescriptor(&depth_stencil_descriptor)
         .expect("Failed to create depth stencil state");
 
-    // FIXME:
-    let vbytes = (std::mem::size_of::<CubeVertex>() * CUBE_VERTS.len()) as NSUInteger;
-    let ibytes = (std::mem::size_of::<u16>() * CUBE_INDICES.len()) as NSUInteger;
     // create a heap for long lived data,  everything else goes on the stack
     let heap_descriptor = MTLHeapDescriptor::new();
     heap_descriptor.setSize(64 * 1024 * 1024);
@@ -306,27 +197,64 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
             .expect("Failed to create heap")
     };
 
-    let vbuf = heap
-        .newBufferWithLength_options(vbytes, MTLResourceOptions::StorageModeShared)
-        .expect("Failed to create buffer");
-    let ibuf = heap
-        .newBufferWithLength_options(ibytes, MTLResourceOptions::StorageModeShared)
-        .expect("Failed to create buffer");
+    let (document, buffers, images) =
+        gltf::import("./src/assets/FlightHelmet.gltf").expect("could not open gltf");
+    assert_eq!(buffers.len(), document.buffers().count());
+    assert_eq!(images.len(), document.images().count());
 
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            CUBE_VERTS.as_ptr() as *const u8,
-            vbuf.contents().as_ptr() as *mut u8,
-            vbytes as usize,
-        );
-    }
+    let mut all_meshes = Vec::new();
 
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            CUBE_INDICES.as_ptr() as *const u8,
-            ibuf.contents().as_ptr() as *mut u8,
-            ibytes as usize,
-        );
+    for mesh in document.meshes() {
+        for primitive in mesh.primitives() {
+            let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
+
+            let positions: Vec<[f32; 3]> = reader.read_positions().expect("No positions").collect();
+
+            let indices: Vec<u32> = reader
+                .read_indices()
+                .expect("No indices")
+                .into_u32()
+                .collect();
+
+            // allocate buffers
+            let vertex_buffer = heap
+                .newBufferWithLength_options(
+                    (positions.len() * std::mem::size_of::<[f32; 3]>()) as NSUInteger,
+                    MTLResourceOptions::StorageModeShared,
+                )
+                .expect("Failed to create vertex buffer");
+
+            let index_buffer = heap
+                .newBufferWithLength_options(
+                    (indices.len() * std::mem::size_of::<[i32; 3]>()) as NSUInteger,
+                    MTLResourceOptions::StorageModeShared,
+                )
+                .expect("Failed to create index buffer");
+
+            // fill them
+            unsafe {
+                let contents = vertex_buffer.contents().as_ptr() as *mut f32;
+                std::ptr::copy_nonoverlapping(
+                    positions.as_ptr() as *const f32,
+                    contents,
+                    positions.len() * 3,
+                );
+            }
+
+            unsafe {
+                let contents = index_buffer.contents().as_ptr() as *mut u32;
+                std::ptr::copy_nonoverlapping(indices.as_ptr(), contents, indices.len());
+            }
+
+            let submesh = Mesh {
+                vertex_buffer,
+                index_buffer,
+                index_count: indices.len(),
+                primitive: MTLPrimitiveType::Triangle,
+            };
+
+            all_meshes.push(submesh);
+        }
     }
 
     let app_state = AppState {
@@ -335,12 +263,12 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
             device,
             command_queue,
         },
-        mesh: Mesh {
-            vertex_buffer: vbuf,
-            index_buffer: ibuf,
-        },
         depth_stencil_state,
         pipeline: pipeline_state,
+        model: Model {
+            mesh: all_meshes,
+            name: "Box".to_string(),
+        },
     };
     (app_state, window, view)
 }
@@ -388,21 +316,14 @@ pub fn frame(view: &MTKView, state: &AppState) {
         );
     }
 
-    unsafe {
-        encoder.setVertexBuffer_offset_atIndex(Some(&state.mesh.vertex_buffer), 0, 1);
-    }
-
     encoder.setRenderPipelineState(&state.pipeline);
     encoder.setDepthStencilState(Some(&state.depth_stencil_state));
-    unsafe {
-        encoder.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset(
-            MTLPrimitiveType::Triangle,
-            CUBE_INDICES.len() as NSUInteger,
-            MTLIndexType::UInt16,
-            &state.mesh.index_buffer,
-            0,
-        );
+
+    // draw call here
+    for mesh in &state.model.mesh {
+        mesh.draw(&encoder);
     }
+
     encoder.endEncoding();
     command_buffer.presentDrawable(ProtocolObject::from_ref(&*drawable));
     command_buffer.commit();
