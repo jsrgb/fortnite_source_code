@@ -4,6 +4,7 @@ mod platform;
 
 use crate::platform::Delegate;
 use crate::platform::Ivars;
+use crate::platform::KEYSTATE;
 
 use objc2::MainThreadOnly;
 use std::ptr::NonNull;
@@ -17,6 +18,12 @@ use objc2::{msg_send, MainThreadMarker};
 use glam::{Mat4, Vec2, Vec3, Vec4};
 
 use objc2_foundation::{ns_string, NSDate, NSPoint, NSRect, NSSize, NSUInteger, NSURL};
+
+// Keyboard constants
+const KEY_W: u16 = 13;
+const KEY_A: u16 = 0;
+const KEY_S: u16 = 1;
+const KEY_D: u16 = 2;
 
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSWindow, NSWindowStyleMask,
@@ -204,6 +211,10 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 
     let mut all_meshes = Vec::new();
 
+    for material in document.materials() {
+        println!("material: {:#?}", material);
+    }
+
     for mesh in document.meshes() {
         for primitive in mesh.primitives() {
             let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
@@ -274,6 +285,22 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 }
 
 pub fn frame(view: &MTKView, state: &AppState) {
+    // Check keyboard input
+    let keys = KEYSTATE.lock().unwrap();
+    if keys.contains(&KEY_W) {
+        println!("W pressed");
+    }
+    if keys.contains(&KEY_A) {
+        println!("A pressed");
+    }
+    if keys.contains(&KEY_S) {
+        println!("S pressed");
+    }
+    if keys.contains(&KEY_D) {
+        println!("D pressed");
+    }
+    drop(keys); // Release the lock before rendering
+
     let Some(drawable) = view.currentDrawable() else {
         return;
     };
