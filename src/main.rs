@@ -88,6 +88,7 @@ pub struct AppState {
     pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     depth_stencil_state: Retained<ProtocolObject<dyn MTLDepthStencilState>>, // FIXME: move
     model: Model,
+    camera_pos: RefCell<Vec3>,
 }
 
 pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
@@ -280,26 +281,31 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
             mesh: all_meshes,
             name: "Box".to_string(),
         },
+        camera_pos: RefCell::new(Vec3::new(1.0, 2.0, -1.0)),
     };
     (app_state, window, view)
 }
 
 pub fn frame(view: &MTKView, state: &AppState) {
-    // Check keyboard input
+    // Update camera position based on keyboard input
     let keys = KEYSTATE.lock().unwrap();
+    let mut camera_pos = state.camera_pos.borrow_mut();
+
+    let move_speed = 0.05;
     if keys.contains(&KEY_W) {
-        println!("W pressed");
-    }
-    if keys.contains(&KEY_A) {
-        println!("A pressed");
+        camera_pos.z += move_speed; // Move forward
     }
     if keys.contains(&KEY_S) {
-        println!("S pressed");
+        camera_pos.z -= move_speed; // Move backward
+    }
+    if keys.contains(&KEY_A) {
+        camera_pos.x -= move_speed; // Move left
     }
     if keys.contains(&KEY_D) {
-        println!("D pressed");
+        camera_pos.x += move_speed; // Move right
     }
-    drop(keys); // Release the lock before rendering
+
+    drop(keys); // Release the lock
 
     let Some(drawable) = view.currentDrawable() else {
         return;
@@ -322,10 +328,11 @@ pub fn frame(view: &MTKView, state: &AppState) {
         500.0, // far plane
     );
     let view = Mat4::look_at_rh(
-        Vec3::new(1.0, 2.0, -1.0), // camera pos
-        Vec3::new(0.0, 0.0, 0.0),  // center
-        Vec3::new(0.0, 1.0, 0.0),  // up vector
+        *camera_pos,                // camera pos (from keyboard input)
+        Vec3::new(0.0, 0.0, 0.0),   // center (looking at origin)
+        Vec3::new(0.0, 1.0, 0.0),   // up vector
     );
+    drop(camera_pos); // Release camera_pos borrow
 
     let view_proj = projection * view;
 
