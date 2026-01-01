@@ -4,6 +4,7 @@ mod platform;
 
 use crate::platform::Delegate;
 use crate::platform::Ivars;
+use crate::platform::KEYSTATE;
 
 use objc2::MainThreadOnly;
 use std::ptr::NonNull;
@@ -17,6 +18,12 @@ use objc2::{msg_send, MainThreadMarker};
 use glam::{Mat4, Vec2, Vec3, Vec4};
 
 use objc2_foundation::{ns_string, NSDate, NSPoint, NSRect, NSSize, NSUInteger, NSURL};
+
+// TODO: Move and improve
+const KEY_W: u16 = 13;
+const KEY_A: u16 = 0;
+const KEY_S: u16 = 1;
+const KEY_D: u16 = 2;
 
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSWindow, NSWindowStyleMask,
@@ -67,6 +74,14 @@ struct Model {
     name: String,
 }
 
+struct Camera {
+    position: Vec3,
+    target: Vec3,
+    direction: Vec3,
+    front: Vec3,
+    up: Vec3,
+}
+
 const WINDOW_W: f64 = 800.0;
 const WINDOW_H: f64 = 600.0;
 
@@ -81,6 +96,10 @@ pub struct AppState {
     pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     depth_stencil_state: Retained<ProtocolObject<dyn MTLDepthStencilState>>, // FIXME: move
     model: Model,
+    // RefCell? In frame() an immutable reference to AppState is passed in.
+    // But camera state needs to mutate when input is pressed
+    // RefCell allows for mutable borrows at runtime, even when the data is immutable
+    camera: RefCell<Camera>,
 }
 
 pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
@@ -204,6 +223,10 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 
     let mut all_meshes = Vec::new();
 
+    for material in document.materials() {
+        //println!("material: {:#?}", material);
+    }
+
     for mesh in document.meshes() {
         for primitive in mesh.primitives() {
             let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
@@ -257,6 +280,16 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         }
     }
 
+    let cam_position = Vec3::new(0.0, 0.5, 3.0);
+    let cam_target = Vec3::new(0.0, 0.0, 0.0);
+    let camera = Camera {
+        position: cam_position,
+        target: cam_target,
+        direction: Vec3::normalize(cam_position - cam_target),
+        front: Vec3::new(0.0, 0.0, -1.0), // Looking at -Z
+        up: Vec3::new(0.0, 1.0, 0.0),
+    };
+
     let app_state = AppState {
         start_date: NSDate::now(),
         device: Device {
@@ -269,11 +302,35 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
             mesh: all_meshes,
             name: "Box".to_string(),
         },
+        camera: RefCell::new(camera),
     };
     (app_state, window, view)
 }
 
 pub fn frame(view: &MTKView, state: &AppState) {
+    let keys = KEYSTATE.lock().unwrap();
+    let mut camera = state.camera.borrow_mut();
+
+    let move_speed = 0.05;
+
+    let front = camera.front;
+    let right = camera.front.cross(camera.up).normalize();
+
+    if keys.contains(&KEY_W) {
+        camera.position += front * move_speed;
+    }
+    if keys.contains(&KEY_S) {
+        camera.position -= front * move_speed;
+    }
+    if keys.contains(&KEY_A) {
+        camera.position -= right * move_speed;
+    }
+    if keys.contains(&KEY_D) {
+        camera.position += right * move_speed;
+    }
+
+    drop(keys); // Release the lock
+
     let Some(drawable) = view.currentDrawable() else {
         return;
     };
@@ -287,6 +344,7 @@ pub fn frame(view: &MTKView, state: &AppState) {
         return;
     };
 
+    // https://learnopengl.com/Getting-started/Camera
     let aspect_ratio = WINDOW_W as f32 / WINDOW_H as f32;
     let projection = glam::Mat4::perspective_rh(
         45.0_f32.to_radians(),
@@ -294,11 +352,9 @@ pub fn frame(view: &MTKView, state: &AppState) {
         0.025, // near plane
         500.0, // far plane
     );
-    let view = Mat4::look_at_rh(
-        Vec3::new(1.0, 2.0, -1.0), // camera pos
-        Vec3::new(0.0, 0.0, 0.0),  // center
-        Vec3::new(0.0, 1.0, 0.0),  // up vector
-    );
+
+    let view = Mat4::look_at_rh(camera.position, camera.position + camera.front, camera.up);
+    drop(camera);
 
     let view_proj = projection * view;
 
@@ -319,7 +375,8 @@ pub fn frame(view: &MTKView, state: &AppState) {
     encoder.setRenderPipelineState(&state.pipeline);
     encoder.setDepthStencilState(Some(&state.depth_stencil_state));
 
-    // draw call here
+    //
+    // Draw
     for mesh in &state.model.mesh {
         mesh.draw(&encoder);
     }
