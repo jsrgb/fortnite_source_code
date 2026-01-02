@@ -58,6 +58,7 @@ objc2-metal = { version = "0.3.2", default-features = false, features = [
   "MTLPixelFormat",
   "MTLDrawable",
   "MTLTypes",
+  "MTLTexture",
   "MTLAccelerationStructureTypes",
   "MTLVertexDescriptor",
   "MTLDepthStencil",
@@ -69,6 +70,8 @@ objc2-metal-kit = { version = "0.3.2", default-features = false, features = [
   "objc2-app-kit",
   "objc2-quartz-core",
   "MTKView",
+  "MTKTextureLoader",
+  "block2",
 ] }
 
 # MetalKit pulls some QuartzCore types in practice.

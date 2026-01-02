@@ -2,11 +2,15 @@
 
 mod platform;
 
+// TODO: What?
+use objc2::AnyThread;
+
 use crate::platform::Delegate;
 use crate::platform::Ivars;
 use crate::platform::KEYSTATE;
 
 use objc2::MainThreadOnly;
+use std::fmt::Debug;
 use std::ptr::NonNull;
 
 use std::cell::RefCell;
@@ -34,11 +38,11 @@ use objc2_metal::{
     MTLCommandQueue, MTLCompareFunction, MTLCreateSystemDefaultDevice, MTLDepthStencilDescriptor,
     MTLDepthStencilState, MTLDevice, MTLHeap, MTLHeapDescriptor, MTLIndexType, MTLLibrary,
     MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder, MTLRenderPipelineDescriptor,
-    MTLRenderPipelineState, MTLResourceOptions, MTLStorageMode, MTLVertexDescriptor,
+    MTLRenderPipelineState, MTLResourceOptions, MTLStorageMode, MTLTexture, MTLVertexDescriptor,
     MTLVertexFormat, MTLVertexStepFunction,
 };
 
-use objc2_metal_kit::MTKView;
+use objc2_metal_kit::{MTKTextureLoader, MTKView};
 
 #[derive(Copy, Clone)]
 #[repr(C)]
@@ -88,6 +92,7 @@ const WINDOW_H: f64 = 600.0;
 struct Device {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    texture_loader: Retained<MTKTextureLoader>,
 }
 
 pub struct AppState {
@@ -141,6 +146,18 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
             .colorAttachments()
             .objectAtIndexedSubscript(0)
             .setPixelFormat(view.colorPixelFormat());
+    }
+
+    //
+    // init Metal Kit Texture Loader
+    let mtk_tex_loader = MTKTextureLoader::initWithDevice(MTKTextureLoader::alloc(), &device);
+    let tex_to_load = { NSURL::fileURLWithPath(ns_string!("./src/assets/grass.png")) };
+
+    unsafe {
+        mtk_tex_loader
+            .newTextureWithContentsOfURL_options_error(&tex_to_load, None)
+            .inspect(|_| println!("texture loaded"))
+            .expect("failed to laod texture");
     }
 
     // FIXME: absolute path
@@ -295,6 +312,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         device: Device {
             device,
             command_queue,
+            texture_loader: mtk_tex_loader,
         },
         depth_stencil_state,
         pipeline: pipeline_state,
