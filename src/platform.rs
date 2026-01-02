@@ -1,9 +1,9 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use crate::{frame, init, AppState};
+use crate::{AppState, frame, init};
 use std::ptr;
 
-use objc2::{rc::Retained, DefinedClass};
+use objc2::DefinedClass;
 
 use std::{cell::RefCell, collections::HashSet, ptr::NonNull, sync::Mutex};
 
