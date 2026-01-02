@@ -5,13 +5,13 @@ mod platform;
 // TODO: What?
 use objc2::AnyThread;
 
+use std::ptr::NonNull;
+
 use crate::platform::Delegate;
 use crate::platform::Ivars;
 use crate::platform::KEYSTATE;
 
 use objc2::MainThreadOnly;
-use std::fmt::Debug;
-use std::ptr::NonNull;
 
 use std::cell::RefCell;
 
@@ -21,13 +21,17 @@ use objc2::{MainThreadMarker, msg_send};
 
 use glam::{Mat4, Vec2, Vec3, Vec4};
 
-use objc2_foundation::{NSDate, NSPoint, NSRect, NSSize, NSUInteger, NSURL, ns_string};
+use objc2_foundation::{
+    NSData, NSDate, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL, ns_string,
+};
 
 // TODO: Move and improve
 const KEY_W: u16 = 13;
 const KEY_A: u16 = 0;
 const KEY_S: u16 = 1;
 const KEY_D: u16 = 2;
+const KEY_SPACE: u16 = 49;
+const KEY_LSHIFT: u16 = 3;
 
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSWindow, NSWindowStyleMask,
@@ -37,8 +41,9 @@ use objc2_metal::{
     MTLBuffer, MTLCPUCacheMode, MTLClearColor, MTLCommandBuffer, MTLCommandEncoder,
     MTLCommandQueue, MTLCompareFunction, MTLCreateSystemDefaultDevice, MTLDepthStencilDescriptor,
     MTLDepthStencilState, MTLDevice, MTLHeap, MTLHeapDescriptor, MTLIndexType, MTLLibrary,
-    MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder, MTLRenderPipelineDescriptor,
-    MTLRenderPipelineState, MTLResourceOptions, MTLStorageMode, MTLTexture, MTLVertexDescriptor,
+    MTLOrigin, MTLPixelFormat, MTLPrimitiveType, MTLRegion, MTLRenderCommandEncoder,
+    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLResourceOptions, MTLSize,
+    MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureUsage, MTLVertexDescriptor,
     MTLVertexFormat, MTLVertexStepFunction,
 };
 
@@ -55,6 +60,7 @@ struct Mesh {
     vertex_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
     index_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
     uv_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
+    texture: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
     index_count: usize,
     primitive: MTLPrimitiveType,
 }
@@ -108,7 +114,6 @@ pub struct AppState {
     // But camera state needs to mutate when input is pressed
     // RefCell allows for mutable borrows at runtime, even when the data is immutable
     camera: RefCell<Camera>,
-    texture: Retained<ProtocolObject<dyn MTLTexture>>,
 }
 
 pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
@@ -155,15 +160,8 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
     //
     // init Metal Kit Texture Loader
     let mtk_tex_loader = MTKTextureLoader::initWithDevice(MTKTextureLoader::alloc(), &device);
-    let path_to_tex = { NSURL::fileURLWithPath(ns_string!("./src/assets/grass.png")) };
 
-    let texture: Retained<ProtocolObject<dyn MTLTexture>> = unsafe {
-        mtk_tex_loader
-            .newTextureWithContentsOfURL_options_error(&path_to_tex, None)
-            .inspect(|_| println!("texture loaded"))
-            .expect("failed to laod texture")
-    };
-
+    // TODO:
     // FIXME: absolute path
     let url = { NSURL::fileURLWithPath(ns_string!("./src/pos_uv.metallib")) };
     let library = device
@@ -221,7 +219,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         .expect("Failed to create pipeline state");
 
     view.setClearColor(MTLClearColor {
-        red: 0.0,
+        red: 0.2,
         green: 0.5,
         blue: 1.0,
         alpha: 1.0,
@@ -240,7 +238,6 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         .newDepthStencilStateWithDescriptor(&depth_stencil_descriptor)
         .expect("Failed to create depth stencil state");
 
-    // create a heap for long lived data,  everything else goes on the stack
     let heap_descriptor = MTLHeapDescriptor::new();
     heap_descriptor.setSize(64 * 1024 * 1024);
     heap_descriptor.setStorageMode(MTLStorageMode::Shared);
@@ -252,15 +249,11 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
     };
 
     let (document, buffers, images) =
-        gltf::import("./src/assets/FlightHelmet.gltf").expect("could not open gltf");
+        gltf::import("./src/assets/Sponza.gltf").expect("could not open gltf");
     assert_eq!(buffers.len(), document.buffers().count());
     assert_eq!(images.len(), document.images().count());
 
     let mut all_meshes = Vec::new();
-
-    for material in document.materials() {
-        //println!("material: {:#?}", material);
-    }
 
     for mesh in document.meshes() {
         for primitive in mesh.primitives() {
@@ -326,20 +319,46 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
                 std::ptr::copy_nonoverlapping(indices.as_ptr(), contents, indices.len());
             }
 
+            let material = primitive.material();
+
+            let texture = if let Some(tex) = material
+                .pbr_metallic_roughness()
+                .metallic_roughness_texture()
+            {
+                let image = tex.texture().source();
+
+                match image.source() {
+                    gltf::image::Source::Uri { uri, .. } => {
+                        let full_path = format!("./src/assets/{}", uri);
+                        let path_to_tex = NSURL::fileURLWithPath(&NSString::from_str(&full_path));
+
+                        Some(unsafe {
+                            mtk_tex_loader
+                                .newTextureWithContentsOfURL_options_error(&path_to_tex, None)
+                                .expect("Failed to load texture from file")
+                        })
+                    }
+                    gltf::image::Source::View { .. } => None,
+                }
+            } else {
+                None
+            };
+
             let submesh = Mesh {
                 vertex_buffer,
                 index_buffer,
                 uv_buffer,
                 index_count: indices.len(),
                 primitive: MTLPrimitiveType::Triangle,
+                texture,
             };
 
             all_meshes.push(submesh);
         }
     }
 
-    let cam_position = Vec3::new(0.0, 0.5, 3.0);
-    let cam_target = Vec3::new(0.0, 0.0, 0.0);
+    let cam_position = Vec3::new(0.0, 3.0, 3.0);
+    let cam_target = Vec3::new(0.0, 1.0, 0.0);
     let camera = Camera {
         position: cam_position,
         target: cam_target,
@@ -362,8 +381,6 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
             name: "Box".to_string(),
         },
         camera: RefCell::new(camera),
-        //tmp
-        texture,
     };
     (app_state, window, view)
 }
@@ -372,10 +389,11 @@ pub fn frame(view: &MTKView, state: &AppState) {
     let keys = KEYSTATE.lock().unwrap();
     let mut camera = state.camera.borrow_mut();
 
-    let move_speed = 0.05;
+    let move_speed = 5.0;
 
     let front = camera.front;
     let right = camera.front.cross(camera.up).normalize();
+    let up = camera.up;
 
     if keys.contains(&KEY_W) {
         camera.position += front * move_speed;
@@ -389,7 +407,13 @@ pub fn frame(view: &MTKView, state: &AppState) {
     if keys.contains(&KEY_D) {
         camera.position += right * move_speed;
     }
-
+    if keys.contains(&KEY_SPACE) {
+        camera.position += up * move_speed;
+    }
+    if keys.contains(&KEY_LSHIFT) {
+        println!("Shift pressed");
+        camera.position -= up * move_speed;
+    }
     drop(keys);
 
     let Some(drawable) = view.currentDrawable() else {
@@ -410,8 +434,8 @@ pub fn frame(view: &MTKView, state: &AppState) {
     let projection = glam::Mat4::perspective_rh(
         45.0_f32.to_radians(),
         aspect_ratio,
-        0.025, // near plane
-        500.0, // far plane
+        0.025,  // near plane
+        1000.0, // far plane
     );
 
     let view = Mat4::look_at_rh(camera.position, camera.position + camera.front, camera.up);
@@ -435,13 +459,17 @@ pub fn frame(view: &MTKView, state: &AppState) {
 
     encoder.setRenderPipelineState(&state.pipeline);
     encoder.setDepthStencilState(Some(&state.depth_stencil_state));
-    unsafe {
-        encoder.setFragmentTexture_atIndex(Some(&state.texture), 0);
-    }
 
     //
     // Draw
     for mesh in &state.model.meshes {
+        unsafe {
+            if let Some(texture) = &mesh.texture {
+                encoder.setFragmentTexture_atIndex(Some(texture), 0);
+            } else {
+                encoder.setFragmentTexture_atIndex(None, 0);
+            }
+        }
         mesh.draw(&encoder);
     }
 
