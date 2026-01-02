@@ -468,6 +468,7 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "663ef60fd5ddeefb1ddf50be71517ce0f7c782ed22f9569edbed00d5aadefb0d"
 dependencies = [
+ "block2",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
