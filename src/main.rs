@@ -2,22 +2,26 @@
 
 mod platform;
 
+// TODO: What?
+use objc2::AnyThread;
+
 use crate::platform::Delegate;
 use crate::platform::Ivars;
 use crate::platform::KEYSTATE;
 
 use objc2::MainThreadOnly;
+use std::fmt::Debug;
 use std::ptr::NonNull;
 
 use std::cell::RefCell;
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2::{msg_send, MainThreadMarker};
+use objc2::{MainThreadMarker, msg_send};
 
 use glam::{Mat4, Vec2, Vec3, Vec4};
 
-use objc2_foundation::{ns_string, NSDate, NSPoint, NSRect, NSSize, NSUInteger, NSURL};
+use objc2_foundation::{NSDate, NSPoint, NSRect, NSSize, NSUInteger, NSURL, ns_string};
 
 // TODO: Move and improve
 const KEY_W: u16 = 13;
@@ -34,11 +38,11 @@ use objc2_metal::{
     MTLCommandQueue, MTLCompareFunction, MTLCreateSystemDefaultDevice, MTLDepthStencilDescriptor,
     MTLDepthStencilState, MTLDevice, MTLHeap, MTLHeapDescriptor, MTLIndexType, MTLLibrary,
     MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder, MTLRenderPipelineDescriptor,
-    MTLRenderPipelineState, MTLResourceOptions, MTLStorageMode, MTLVertexDescriptor,
+    MTLRenderPipelineState, MTLResourceOptions, MTLStorageMode, MTLTexture, MTLVertexDescriptor,
     MTLVertexFormat, MTLVertexStepFunction,
 };
 
-use objc2_metal_kit::MTKView;
+use objc2_metal_kit::{MTKTextureLoader, MTKView};
 
 #[derive(Copy, Clone)]
 #[repr(C)]
@@ -50,6 +54,7 @@ struct Uniforms {
 struct Mesh {
     vertex_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
     index_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
+    uv_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
     index_count: usize,
     primitive: MTLPrimitiveType,
 }
@@ -58,6 +63,7 @@ impl Mesh {
     fn draw(&self, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
         unsafe {
             encoder.setVertexBuffer_offset_atIndex(Some(&self.vertex_buffer), 0, 1);
+            encoder.setVertexBuffer_offset_atIndex(Some(&self.uv_buffer), 0, 2);
             encoder.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset(
                 self.primitive,
                 self.index_count,
@@ -70,7 +76,8 @@ impl Mesh {
 }
 
 struct Model {
-    mesh: Vec<Mesh>,
+    meshes: Vec<Mesh>,
+    // TODO: materials
     name: String,
 }
 
@@ -88,6 +95,7 @@ const WINDOW_H: f64 = 600.0;
 struct Device {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    //texture_loader: Retained<MTKTextureLoader>,
 }
 
 pub struct AppState {
@@ -100,6 +108,7 @@ pub struct AppState {
     // But camera state needs to mutate when input is pressed
     // RefCell allows for mutable borrows at runtime, even when the data is immutable
     camera: RefCell<Camera>,
+    texture: Retained<ProtocolObject<dyn MTLTexture>>,
 }
 
 pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
@@ -143,8 +152,20 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
             .setPixelFormat(view.colorPixelFormat());
     }
 
+    //
+    // init Metal Kit Texture Loader
+    let mtk_tex_loader = MTKTextureLoader::initWithDevice(MTKTextureLoader::alloc(), &device);
+    let path_to_tex = { NSURL::fileURLWithPath(ns_string!("./src/assets/grass.png")) };
+
+    let texture: Retained<ProtocolObject<dyn MTLTexture>> = unsafe {
+        mtk_tex_loader
+            .newTextureWithContentsOfURL_options_error(&path_to_tex, None)
+            .inspect(|_| println!("texture loaded"))
+            .expect("failed to laod texture")
+    };
+
     // FIXME: absolute path
-    let url = { NSURL::fileURLWithPath(ns_string!("./src/cube.metallib")) };
+    let url = { NSURL::fileURLWithPath(ns_string!("./src/pos_uv.metallib")) };
     let library = device
         .newLibraryWithURL_error(&url)
         .expect("Failed to compile shaders");
@@ -174,6 +195,20 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
     unsafe {
         let layout = vertex_descriptor.layouts().objectAtIndexedSubscript(1);
         layout.setStride(std::mem::size_of::<[f32; 3]>() as NSUInteger); // 24
+        layout.setStepFunction(MTLVertexStepFunction::PerVertex);
+        layout.setStepRate(1);
+    }
+
+    unsafe {
+        let a1 = vertex_descriptor.attributes().objectAtIndexedSubscript(1);
+        a1.setFormat(MTLVertexFormat::Float2);
+        a1.setOffset(0);
+        a1.setBufferIndex(2);
+    }
+
+    unsafe {
+        let layout = vertex_descriptor.layouts().objectAtIndexedSubscript(2);
+        layout.setStride(std::mem::size_of::<[f32; 2]>() as NSUInteger);
         layout.setStepFunction(MTLVertexStepFunction::PerVertex);
         layout.setStepRate(1);
     }
@@ -233,6 +268,12 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 
             let positions: Vec<[f32; 3]> = reader.read_positions().expect("No positions").collect();
 
+            let tex_coords: Vec<[f32; 2]> = reader
+                .read_tex_coords(0)
+                .expect("no texture coordinates")
+                .into_f32()
+                .collect();
+
             let indices: Vec<u32> = reader
                 .read_indices()
                 .expect("No indices")
@@ -246,6 +287,13 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
                     MTLResourceOptions::StorageModeShared,
                 )
                 .expect("Failed to create vertex buffer");
+
+            let uv_buffer = heap
+                .newBufferWithLength_options(
+                    (tex_coords.len() * std::mem::size_of::<[f32; 2]>()) as NSUInteger,
+                    MTLResourceOptions::StorageModeShared,
+                )
+                .expect("Failed to create uv buffer");
 
             let index_buffer = heap
                 .newBufferWithLength_options(
@@ -265,6 +313,15 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
             }
 
             unsafe {
+                let contents = uv_buffer.contents().as_ptr() as *mut f32;
+                std::ptr::copy_nonoverlapping(
+                    tex_coords.as_ptr() as *const f32,
+                    contents,
+                    tex_coords.len() * 2,
+                );
+            }
+
+            unsafe {
                 let contents = index_buffer.contents().as_ptr() as *mut u32;
                 std::ptr::copy_nonoverlapping(indices.as_ptr(), contents, indices.len());
             }
@@ -272,6 +329,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
             let submesh = Mesh {
                 vertex_buffer,
                 index_buffer,
+                uv_buffer,
                 index_count: indices.len(),
                 primitive: MTLPrimitiveType::Triangle,
             };
@@ -295,14 +353,17 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         device: Device {
             device,
             command_queue,
+            //texture_loader: mtk_tex_loader,
         },
         depth_stencil_state,
         pipeline: pipeline_state,
         model: Model {
-            mesh: all_meshes,
+            meshes: all_meshes,
             name: "Box".to_string(),
         },
         camera: RefCell::new(camera),
+        //tmp
+        texture,
     };
     (app_state, window, view)
 }
@@ -329,7 +390,7 @@ pub fn frame(view: &MTKView, state: &AppState) {
         camera.position += right * move_speed;
     }
 
-    drop(keys); // Release the lock
+    drop(keys);
 
     let Some(drawable) = view.currentDrawable() else {
         return;
@@ -374,10 +435,13 @@ pub fn frame(view: &MTKView, state: &AppState) {
 
     encoder.setRenderPipelineState(&state.pipeline);
     encoder.setDepthStencilState(Some(&state.depth_stencil_state));
+    unsafe {
+        encoder.setFragmentTexture_atIndex(Some(&state.texture), 0);
+    }
 
     //
     // Draw
-    for mesh in &state.model.mesh {
+    for mesh in &state.model.meshes {
         mesh.draw(&encoder);
     }
 
