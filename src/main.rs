@@ -56,10 +56,22 @@ struct Uniforms {
     time: f32,
 }
 
+#[derive(Copy, Clone)]
+enum BufferKind {
+    POSITIONS = 1,
+    UV = 2,
+}
+
+struct Buffer {
+    buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
+    binding: BufferKind,
+    format: MTLVertexFormat, // TODO: Move this to a VertexSpec struct
+                             // buffer offset?
+}
+
 struct Mesh {
-    vertex_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
+    buffers: Vec<Buffer>,
     index_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
-    uv_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
     texture: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
     index_count: usize,
     primitive: MTLPrimitiveType,
@@ -68,8 +80,13 @@ struct Mesh {
 impl Mesh {
     fn draw(&self, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
         unsafe {
-            encoder.setVertexBuffer_offset_atIndex(Some(&self.vertex_buffer), 0, 1);
-            encoder.setVertexBuffer_offset_atIndex(Some(&self.uv_buffer), 0, 2);
+            for buffer in &self.buffers {
+                encoder.setVertexBuffer_offset_atIndex(
+                    Some(&buffer.buffer),
+                    0,
+                    buffer.binding as NSUInteger,
+                );
+            }
             encoder.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset(
                 self.primitive,
                 self.index_count,
@@ -113,6 +130,7 @@ pub struct AppState {
     // RefCell? In frame() an immutable reference to AppState is passed in.
     // But camera state needs to mutate when input is pressed
     // RefCell allows for mutable borrows at runtime, even when the data is immutable
+    // Maybe move out of app state
     camera: RefCell<Camera>,
 }
 
@@ -161,7 +179,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
     // init Metal Kit Texture Loader
     let mtk_tex_loader = MTKTextureLoader::initWithDevice(MTKTextureLoader::alloc(), &device);
 
-    // TODO:
+    // TODO: ShaderModule struct
     // FIXME: absolute path
     let url = { NSURL::fileURLWithPath(ns_string!("./src/pos_uv.metallib")) };
     let library = device
@@ -176,47 +194,6 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 
     // Add depth stencil attachment
     pipeline_descriptor.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
-
-    // A MTLVertexDescriptor has attributes and layouts
-    let vertex_descriptor = MTLVertexDescriptor::new();
-
-    // Attribute 0: position (float3) at offset 0 in buffer(1)
-    unsafe {
-        let a0 = vertex_descriptor.attributes().objectAtIndexedSubscript(0);
-        a0.setFormat(MTLVertexFormat::Float3);
-        a0.setOffset(0);
-        a0.setBufferIndex(1);
-    }
-
-    // layouts describe how to fetch (stride,offset)
-    // Layout for buffer(1): stride = 24 bytes
-    unsafe {
-        let layout = vertex_descriptor.layouts().objectAtIndexedSubscript(1);
-        layout.setStride(std::mem::size_of::<[f32; 3]>() as NSUInteger); // 24
-        layout.setStepFunction(MTLVertexStepFunction::PerVertex);
-        layout.setStepRate(1);
-    }
-
-    unsafe {
-        let a1 = vertex_descriptor.attributes().objectAtIndexedSubscript(1);
-        a1.setFormat(MTLVertexFormat::Float2);
-        a1.setOffset(0);
-        a1.setBufferIndex(2);
-    }
-
-    unsafe {
-        let layout = vertex_descriptor.layouts().objectAtIndexedSubscript(2);
-        layout.setStride(std::mem::size_of::<[f32; 2]>() as NSUInteger);
-        layout.setStepFunction(MTLVertexStepFunction::PerVertex);
-        layout.setStepRate(1);
-    }
-
-    // Attached vertex spec to pipeline
-    pipeline_descriptor.setVertexDescriptor(Some(&vertex_descriptor));
-
-    let pipeline_state = device
-        .newRenderPipelineStateWithDescriptor_error(&pipeline_descriptor)
-        .expect("Failed to create pipeline state");
 
     view.setClearColor(MTLClearColor {
         red: 0.2,
@@ -274,19 +251,27 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
                 .collect();
 
             // allocate buffers
-            let vertex_buffer = heap
-                .newBufferWithLength_options(
-                    (positions.len() * std::mem::size_of::<[f32; 3]>()) as NSUInteger,
-                    MTLResourceOptions::StorageModeShared,
-                )
-                .expect("Failed to create vertex buffer");
+            let position_buffer = Buffer {
+                buffer: heap
+                    .newBufferWithLength_options(
+                        (positions.len() * std::mem::size_of::<[f32; 3]>()) as NSUInteger,
+                        MTLResourceOptions::StorageModeShared,
+                    )
+                    .expect("Failed to create vertex buffer"),
+                binding: BufferKind::POSITIONS,
+                format: MTLVertexFormat::Float3,
+            };
 
-            let uv_buffer = heap
-                .newBufferWithLength_options(
-                    (tex_coords.len() * std::mem::size_of::<[f32; 2]>()) as NSUInteger,
-                    MTLResourceOptions::StorageModeShared,
-                )
-                .expect("Failed to create uv buffer");
+            let uv_buffer = Buffer {
+                buffer: heap
+                    .newBufferWithLength_options(
+                        (tex_coords.len() * std::mem::size_of::<[f32; 2]>()) as NSUInteger,
+                        MTLResourceOptions::StorageModeShared,
+                    )
+                    .expect("Failed to create uv buffer"),
+                binding: BufferKind::UV,
+                format: MTLVertexFormat::Float2,
+            };
 
             let index_buffer = heap
                 .newBufferWithLength_options(
@@ -297,7 +282,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 
             // fill them
             unsafe {
-                let contents = vertex_buffer.contents().as_ptr() as *mut f32;
+                let contents = position_buffer.buffer.contents().as_ptr() as *mut f32;
                 std::ptr::copy_nonoverlapping(
                     positions.as_ptr() as *const f32,
                     contents,
@@ -306,7 +291,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
             }
 
             unsafe {
-                let contents = uv_buffer.contents().as_ptr() as *mut f32;
+                let contents = uv_buffer.buffer.contents().as_ptr() as *mut f32;
                 std::ptr::copy_nonoverlapping(
                     tex_coords.as_ptr() as *const f32,
                     contents,
@@ -344,10 +329,13 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
                 None
             };
 
+            let mut all_buffers = Vec::new();
+            all_buffers.push(position_buffer);
+            all_buffers.push(uv_buffer);
+
             let submesh = Mesh {
-                vertex_buffer,
+                buffers: all_buffers,
                 index_buffer,
-                uv_buffer,
                 index_count: indices.len(),
                 primitive: MTLPrimitiveType::Triangle,
                 texture,
@@ -356,6 +344,49 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
             all_meshes.push(submesh);
         }
     }
+
+    // A MTLVertexDescriptor has attributes and layouts
+    let vertex_descriptor = MTLVertexDescriptor::new();
+
+    // Attribute 0: position (float3) at offset 0 in buffer(1)
+    unsafe {
+        let a0 = vertex_descriptor.attributes().objectAtIndexedSubscript(0);
+        a0.setFormat(MTLVertexFormat::Float3);
+        a0.setOffset(0);
+        a0.setBufferIndex(1);
+    }
+
+    // layouts describe how to fetch (stride,offset)
+    // Layout for buffer(1): stride = 24 bytes
+    // POS
+    unsafe {
+        let layout = vertex_descriptor.layouts().objectAtIndexedSubscript(1);
+        layout.setStride(std::mem::size_of::<[f32; 3]>() as NSUInteger); // 12
+        layout.setStepFunction(MTLVertexStepFunction::PerVertex);
+        layout.setStepRate(1);
+    }
+
+    // UV
+    unsafe {
+        let a1 = vertex_descriptor.attributes().objectAtIndexedSubscript(1);
+        a1.setFormat(MTLVertexFormat::Float2);
+        a1.setOffset(0);
+        a1.setBufferIndex(2);
+    }
+
+    unsafe {
+        let layout = vertex_descriptor.layouts().objectAtIndexedSubscript(2);
+        layout.setStride(std::mem::size_of::<[f32; 2]>() as NSUInteger);
+        layout.setStepFunction(MTLVertexStepFunction::PerVertex);
+        layout.setStepRate(1);
+    }
+
+    // Attached vertex spec to pipeline
+    pipeline_descriptor.setVertexDescriptor(Some(&vertex_descriptor));
+
+    let pipeline_state = device
+        .newRenderPipelineStateWithDescriptor_error(&pipeline_descriptor)
+        .expect("Failed to create pipeline state");
 
     let cam_position = Vec3::new(0.0, 3.0, 3.0);
     let cam_target = Vec3::new(0.0, 1.0, 0.0);
@@ -411,7 +442,6 @@ pub fn frame(view: &MTKView, state: &AppState) {
         camera.position += up * move_speed;
     }
     if keys.contains(&KEY_LSHIFT) {
-        println!("Shift pressed");
         camera.position -= up * move_speed;
     }
     drop(keys);
