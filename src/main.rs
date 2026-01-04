@@ -115,6 +115,28 @@ struct Camera {
     pitch: f32,
 }
 
+impl Camera {
+    fn new(
+        position: Vec3,
+        target: Vec3,
+        direction: Vec3,
+        front: Vec3,
+        up: Vec3,
+        yaw: f32,
+        pitch: f32,
+    ) -> Self {
+        Self {
+            position,
+            target,
+            direction,
+            front,
+            up,
+            yaw,
+            pitch,
+        }
+    }
+}
+
 const WINDOW_W: f64 = 800.0;
 const WINDOW_H: f64 = 600.0;
 
@@ -218,16 +240,6 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         .newDepthStencilStateWithDescriptor(&depth_stencil_descriptor)
         .expect("Failed to create depth stencil state");
 
-    let heap_descriptor = MTLHeapDescriptor::new();
-    heap_descriptor.setSize(64 * 1024 * 1024);
-    heap_descriptor.setStorageMode(MTLStorageMode::Shared);
-    heap_descriptor.setCpuCacheMode(MTLCPUCacheMode::DefaultCache);
-    let heap = {
-        device
-            .newHeapWithDescriptor(&heap_descriptor)
-            .expect("Failed to create heap")
-    };
-
     let (document, buffers, images) =
         gltf::import("./src/assets/Sponza.gltf").expect("could not open gltf");
     assert_eq!(buffers.len(), document.buffers().count());
@@ -255,7 +267,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 
             // allocate buffers
             let position_buffer = Buffer {
-                buffer: heap
+                buffer: device
                     .newBufferWithLength_options(
                         (positions.len() * std::mem::size_of::<[f32; 3]>()) as NSUInteger,
                         MTLResourceOptions::StorageModeShared,
@@ -266,7 +278,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
             };
 
             let uv_buffer = Buffer {
-                buffer: heap
+                buffer: device
                     .newBufferWithLength_options(
                         (tex_coords.len() * std::mem::size_of::<[f32; 2]>()) as NSUInteger,
                         MTLResourceOptions::StorageModeShared,
@@ -276,7 +288,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
                 format: MTLVertexFormat::Float2,
             };
 
-            let index_buffer = heap
+            let index_buffer = device
                 .newBufferWithLength_options(
                     (indices.len() * std::mem::size_of::<[i32; 3]>()) as NSUInteger,
                     MTLResourceOptions::StorageModeShared,
@@ -389,24 +401,23 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         .newRenderPipelineStateWithDescriptor_error(&pipeline_descriptor)
         .expect("Failed to create pipeline state");
 
-    let cam_position = Vec3::new(0.0, 3.0, 3.0);
-    let cam_target = Vec3::new(0.0, 1.0, 0.0);
-    let camera = Camera {
-        position: cam_position,
-        target: cam_target,
-        direction: Vec3::normalize(cam_position - cam_target),
-        front: Vec3::new(0.0, 0.0, -1.0), // Looking at -Z
-        up: Vec3::new(0.0, 1.0, 0.0),
-        yaw: -90.0,
-        pitch: 0.0,
-    };
+    let cam_position = Vec3::new(0.0, 10.0, 0.0);
+    let cam_target = Vec3::new(0.0, 0.0, 0.0);
+    let camera = Camera::new(
+        cam_position,
+        cam_target,
+        Vec3::normalize(cam_position - cam_target), // direction
+        Vec3::new(0.0, 0.0, -1.0),                  // front, Looking at -Z
+        Vec3::new(0.0, 1.0, 0.0),                   // up
+        -90.0,                                      // yaw
+        0.0,                                        // pitch
+    );
 
     let app_state = AppState {
         start_date: NSDate::now(),
         device: Device {
             device,
             command_queue,
-            //texture_loader: mtk_tex_loader,
         },
         depth_stencil_state,
         pipeline: pipeline_state,
