@@ -23,13 +23,13 @@ use glam::{Mat4, Vec3};
 
 use objc2_foundation::{ns_string, NSDate, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL};
 
-// TODO: Move and improve
 const KEY_W: u16 = 13;
 const KEY_A: u16 = 0;
 const KEY_S: u16 = 1;
 const KEY_D: u16 = 2;
-const KEY_SPACE: u16 = 49;
+const KEY_SPC: u16 = 49;
 const KEY_LSHIFT: u16 = 3; // F key
+                           // TODO: Move and improve
 
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSWindow, NSWindowStyleMask,
@@ -412,7 +412,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 }
 
 pub fn frame(view: &MTKView, state: &AppState) {
-    let keys = KEYSTATE.lock().unwrap();
+    let keystate = KEYSTATE.lock().unwrap();
     let mut camera = state.camera.borrow_mut();
 
     let move_speed = 4.0;
@@ -421,25 +421,25 @@ pub fn frame(view: &MTKView, state: &AppState) {
     let right = camera.front.cross(camera.up).normalize();
     let up = camera.up;
 
-    if keys.contains(&KEY_W) {
+    if keystate.contains(&KEY_W) {
         camera.position += front * move_speed;
     }
-    if keys.contains(&KEY_S) {
+    if keystate.contains(&KEY_S) {
         camera.position -= front * move_speed;
     }
-    if keys.contains(&KEY_A) {
+    if keystate.contains(&KEY_A) {
         camera.position -= right * move_speed;
     }
-    if keys.contains(&KEY_D) {
+    if keystate.contains(&KEY_D) {
         camera.position += right * move_speed;
     }
-    if keys.contains(&KEY_SPACE) {
+    if keystate.contains(&KEY_SPC) {
         camera.position += up * move_speed;
     }
-    if keys.contains(&KEY_LSHIFT) {
+    if keystate.contains(&KEY_LSHIFT) {
         camera.position -= up * move_speed;
     }
-    drop(keys);
+    drop(keystate);
 
     let Some(drawable) = view.currentDrawable() else {
         return;
