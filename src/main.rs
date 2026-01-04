@@ -17,13 +17,11 @@ use std::cell::RefCell;
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2::{MainThreadMarker, msg_send};
+use objc2::{msg_send, MainThreadMarker};
 
-use glam::{Mat4, Vec2, Vec3, Vec4};
+use glam::{Mat4, Vec3};
 
-use objc2_foundation::{
-    NSData, NSDate, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL, ns_string,
-};
+use objc2_foundation::{ns_string, NSDate, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL};
 
 // TODO: Move and improve
 const KEY_W: u16 = 13;
@@ -31,7 +29,7 @@ const KEY_A: u16 = 0;
 const KEY_S: u16 = 1;
 const KEY_D: u16 = 2;
 const KEY_SPACE: u16 = 49;
-const KEY_LSHIFT: u16 = 3;
+const KEY_LSHIFT: u16 = 3; // F key
 
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSWindow, NSWindowStyleMask,
@@ -41,9 +39,8 @@ use objc2_metal::{
     MTLBuffer, MTLCPUCacheMode, MTLClearColor, MTLCommandBuffer, MTLCommandEncoder,
     MTLCommandQueue, MTLCompareFunction, MTLCreateSystemDefaultDevice, MTLDepthStencilDescriptor,
     MTLDepthStencilState, MTLDevice, MTLHeap, MTLHeapDescriptor, MTLIndexType, MTLLibrary,
-    MTLOrigin, MTLPixelFormat, MTLPrimitiveType, MTLRegion, MTLRenderCommandEncoder,
-    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLResourceOptions, MTLSize,
-    MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureUsage, MTLVertexDescriptor,
+    MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder, MTLRenderPipelineDescriptor,
+    MTLRenderPipelineState, MTLResourceOptions, MTLStorageMode, MTLTexture, MTLVertexDescriptor,
     MTLVertexFormat, MTLVertexStepFunction,
 };
 
@@ -181,7 +178,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 
     // TODO: ShaderModule struct
     // FIXME: absolute path
-    let url = { NSURL::fileURLWithPath(ns_string!("./src/pos_uv.metallib")) };
+    let url = { NSURL::fileURLWithPath(ns_string!("./src/shaders/pos_uv.metallib")) };
     let library = device
         .newLibraryWithURL_error(&url)
         .expect("Failed to compile shaders");
@@ -197,8 +194,8 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 
     view.setClearColor(MTLClearColor {
         red: 0.2,
-        green: 0.5,
-        blue: 1.0,
+        green: 0.2,
+        blue: 0.8,
         alpha: 1.0,
     });
 
@@ -306,9 +303,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 
             let material = primitive.material();
 
-            let texture = if let Some(tex) = material
-                .pbr_metallic_roughness()
-                .metallic_roughness_texture()
+            let texture = if let Some(tex) = material.pbr_metallic_roughness().base_color_texture()
             {
                 let image = tex.texture().source();
 
@@ -420,7 +415,7 @@ pub fn frame(view: &MTKView, state: &AppState) {
     let keys = KEYSTATE.lock().unwrap();
     let mut camera = state.camera.borrow_mut();
 
-    let move_speed = 5.0;
+    let move_speed = 4.0;
 
     let front = camera.front;
     let right = camera.front.cross(camera.up).normalize();
