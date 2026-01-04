@@ -1,15 +1,15 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod platform;
+mod resource;
 
 // TODO: What?
 use objc2::AnyThread;
 
 use std::ptr::NonNull;
 
-use crate::platform::Delegate;
-use crate::platform::Ivars;
-use crate::platform::KEYSTATE;
+use crate::platform::{Delegate, Ivars, KEYSTATE};
+use crate::resource::{Asset, Buffer, BufferKind, Device, Mesh};
 
 use objc2::MainThreadOnly;
 
@@ -17,11 +17,11 @@ use std::cell::RefCell;
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2::{MainThreadMarker, msg_send};
+use objc2::{msg_send, MainThreadMarker};
 
 use glam::{Mat4, Vec3};
 
-use objc2_foundation::{NSDate, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL, ns_string};
+use objc2_foundation::{ns_string, NSDate, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL};
 
 // TODO: Move and improve
 const KEY_W: u16 = 13;
@@ -39,14 +39,7 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSWindow, NSWindowStyleMask,
 };
 
-use objc2_metal::{
-    MTLBuffer, MTLCPUCacheMode, MTLClearColor, MTLCommandBuffer, MTLCommandEncoder,
-    MTLCommandQueue, MTLCompareFunction, MTLCreateSystemDefaultDevice, MTLDepthStencilDescriptor,
-    MTLDepthStencilState, MTLDevice, MTLHeap, MTLHeapDescriptor, MTLIndexType, MTLLibrary,
-    MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder, MTLRenderPipelineDescriptor,
-    MTLRenderPipelineState, MTLResourceOptions, MTLStorageMode, MTLTexture, MTLVertexDescriptor,
-    MTLVertexFormat, MTLVertexStepFunction,
-};
+use objc2_metal::*;
 
 use objc2_metal_kit::{MTKTextureLoader, MTKView};
 
@@ -57,54 +50,7 @@ struct Uniforms {
     time: f32,
 }
 
-#[derive(Copy, Clone)]
-enum BufferKind {
-    POSITIONS = 1,
-    UV = 2,
-}
-
-struct Buffer {
-    buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
-    binding: BufferKind,
-    format: MTLVertexFormat, // TODO: Move this to a VertexSpec struct
-                             // buffer offset?
-}
-
-struct Mesh {
-    buffers: Vec<Buffer>,
-    index_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
-    texture: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
-    index_count: usize,
-    primitive: MTLPrimitiveType,
-}
-
-impl Mesh {
-    fn draw(&self, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
-        unsafe {
-            for buffer in &self.buffers {
-                encoder.setVertexBuffer_offset_atIndex(
-                    Some(&buffer.buffer),
-                    0,
-                    buffer.binding as NSUInteger,
-                );
-            }
-            encoder.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset(
-                self.primitive,
-                self.index_count,
-                MTLIndexType::UInt32,
-                &self.index_buffer,
-                0,
-            );
-        }
-    }
-}
-
-struct Model {
-    meshes: Vec<Mesh>,
-    // TODO: materials
-    name: String,
-}
-
+// TODO: camera.rs?
 struct Camera {
     position: Vec3,
     target: Vec3,
@@ -140,18 +86,12 @@ impl Camera {
 const WINDOW_W: f64 = 800.0;
 const WINDOW_H: f64 = 600.0;
 
-struct Device {
-    device: Retained<ProtocolObject<dyn MTLDevice>>,
-    command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
-    //texture_loader: Retained<MTKTextureLoader>,
-}
-
 pub struct AppState {
     start_date: Retained<NSDate>,
-    device: Device,
+    pub device: Device,
     pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
-    depth_stencil_state: Retained<ProtocolObject<dyn MTLDepthStencilState>>, // FIXME: move
-    model: Model,
+    depth_stencil_state: Retained<ProtocolObject<dyn MTLDepthStencilState>>,
+    model: Asset,
     // RefCell? In frame() an immutable reference to AppState is passed in.
     // But camera state needs to mutate when input is pressed
     // RefCell allows for mutable borrows at runtime, even when the data is immutable
@@ -266,28 +206,23 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
                 .collect();
 
             // allocate buffers
-            let position_buffer = Buffer {
-                buffer: device
-                    .newBufferWithLength_options(
-                        (positions.len() * std::mem::size_of::<[f32; 3]>()) as NSUInteger,
-                        MTLResourceOptions::StorageModeShared,
-                    )
-                    .expect("Failed to create vertex buffer"),
-                binding: BufferKind::POSITIONS,
-                format: MTLVertexFormat::Float3,
-            };
+            let position_buffer = Buffer::new(
+                &device,
+                positions.len(),
+                std::mem::size_of::<[f32; 3]>(),
+                MTLResourceOptions::StorageModeShared,
+                BufferKind::POSITIONS,
+            );
 
-            let uv_buffer = Buffer {
-                buffer: device
-                    .newBufferWithLength_options(
-                        (tex_coords.len() * std::mem::size_of::<[f32; 2]>()) as NSUInteger,
-                        MTLResourceOptions::StorageModeShared,
-                    )
-                    .expect("Failed to create uv buffer"),
-                binding: BufferKind::UV,
-                format: MTLVertexFormat::Float2,
-            };
+            let uv_buffer = Buffer::new(
+                &device,
+                tex_coords.len(),
+                std::mem::size_of::<[f32; 2]>(),
+                MTLResourceOptions::StorageModeShared,
+                BufferKind::UV,
+            );
 
+            // TODO: more generic buffer create?
             let index_buffer = device
                 .newBufferWithLength_options(
                     (indices.len() * std::mem::size_of::<[i32; 3]>()) as NSUInteger,
@@ -346,18 +281,19 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
             all_buffers.push(position_buffer);
             all_buffers.push(uv_buffer);
 
-            let submesh = Mesh {
-                buffers: all_buffers,
+            let submesh = Mesh::new(
+                all_buffers,
                 index_buffer,
-                index_count: indices.len(),
-                primitive: MTLPrimitiveType::Triangle,
-                texture,
-            };
+                texture, // TODO: List of materials
+                indices.len(),
+                MTLPrimitiveType::Triangle,
+            );
 
             all_meshes.push(submesh);
         }
     }
 
+    // TODO: Move to resource module
     // A MTLVertexDescriptor has attributes and layouts
     let vertex_descriptor = MTLVertexDescriptor::new();
 
@@ -421,7 +357,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         },
         depth_stencil_state,
         pipeline: pipeline_state,
-        model: Model {
+        model: Asset {
             meshes: all_meshes,
             name: "Box".to_string(),
         },
@@ -550,7 +486,7 @@ pub fn frame(view: &MTKView, state: &AppState) {
     // Meshes
     for mesh in &state.model.meshes {
         unsafe {
-            if let Some(texture) = &mesh.texture {
+            if let Some(texture) = &mesh.materials {
                 encoder.setFragmentTexture_atIndex(Some(texture), 0);
             } else {
                 encoder.setFragmentTexture_atIndex(None, 0);
