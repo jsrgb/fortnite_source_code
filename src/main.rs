@@ -17,19 +17,23 @@ use std::cell::RefCell;
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2::{msg_send, MainThreadMarker};
+use objc2::{MainThreadMarker, msg_send};
 
 use glam::{Mat4, Vec3};
 
-use objc2_foundation::{ns_string, NSDate, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL};
+use objc2_foundation::{NSDate, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL, ns_string};
 
 // TODO: Move and improve
 const KEY_W: u16 = 13;
 const KEY_A: u16 = 0;
 const KEY_S: u16 = 1;
 const KEY_D: u16 = 2;
-const KEY_SPACE: u16 = 49;
-const KEY_LSHIFT: u16 = 3; // F key
+const KEY_Q: u16 = 12;
+const KEY_E: u16 = 14;
+const KEY_SPC: u16 = 49;
+const KEY_C: u16 = 8;
+const KEY_R: u16 = 15;
+const KEY_F: u16 = 3;
 
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSWindow, NSWindowStyleMask,
@@ -107,6 +111,8 @@ struct Camera {
     direction: Vec3,
     front: Vec3,
     up: Vec3,
+    yaw: f32,
+    pitch: f32,
 }
 
 const WINDOW_W: f64 = 800.0;
@@ -391,6 +397,8 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         direction: Vec3::normalize(cam_position - cam_target),
         front: Vec3::new(0.0, 0.0, -1.0), // Looking at -Z
         up: Vec3::new(0.0, 1.0, 0.0),
+        yaw: -90.0,
+        pitch: 0.0,
     };
 
     let app_state = AppState {
@@ -412,34 +420,64 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 }
 
 pub fn frame(view: &MTKView, state: &AppState) {
-    let keys = KEYSTATE.lock().unwrap();
+    let keystate = KEYSTATE.lock().unwrap();
     let mut camera = state.camera.borrow_mut();
 
     let move_speed = 4.0;
 
-    let front = camera.front;
-    let right = camera.front.cross(camera.up).normalize();
+    let direction = Vec3::new(
+        f32::cos(f32::to_radians(camera.yaw)) * f32::cos(f32::to_radians(camera.pitch)),
+        f32::sin(f32::to_radians(camera.pitch)),
+        f32::sin(f32::to_radians(camera.yaw)) * f32::cos(f32::to_radians(camera.pitch)),
+    );
+    let front = direction.normalize();
+    camera.front = front;
+    let right = front.cross(camera.up).normalize();
     let up = camera.up;
 
-    if keys.contains(&KEY_W) {
+    if keystate.contains(&KEY_W) {
         camera.position += front * move_speed;
     }
-    if keys.contains(&KEY_S) {
+    if keystate.contains(&KEY_S) {
         camera.position -= front * move_speed;
     }
-    if keys.contains(&KEY_A) {
+    if keystate.contains(&KEY_A) {
         camera.position -= right * move_speed;
     }
-    if keys.contains(&KEY_D) {
+    if keystate.contains(&KEY_D) {
         camera.position += right * move_speed;
     }
-    if keys.contains(&KEY_SPACE) {
+    if keystate.contains(&KEY_SPC) {
         camera.position += up * move_speed;
     }
-    if keys.contains(&KEY_LSHIFT) {
+    if keystate.contains(&KEY_C) {
         camera.position -= up * move_speed;
     }
-    drop(keys);
+
+    let yaw_sens: f32 = 7.0;
+    let pitch_sens: f32 = 7.0;
+    if keystate.contains(&KEY_Q) {
+        camera.yaw -= yaw_sens;
+    }
+    if keystate.contains(&KEY_E) {
+        camera.yaw += yaw_sens;
+    }
+
+    if keystate.contains(&KEY_F) {
+        camera.pitch -= pitch_sens;
+    }
+    if keystate.contains(&KEY_R) {
+        camera.pitch += pitch_sens;
+    }
+
+    if camera.pitch > 89.0 {
+        camera.pitch = 89.0;
+    }
+    if camera.pitch < -89.0 {
+        camera.pitch = -89.0;
+    }
+
+    drop(keystate);
 
     let Some(drawable) = view.currentDrawable() else {
         return;
@@ -457,17 +495,17 @@ pub fn frame(view: &MTKView, state: &AppState) {
     // https://learnopengl.com/Getting-started/Camera
     let aspect_ratio = WINDOW_W as f32 / WINDOW_H as f32;
     let projection = glam::Mat4::perspective_rh(
-        45.0_f32.to_radians(),
+        f32::to_radians(60.0),
         aspect_ratio,
         0.025,  // near plane
-        1000.0, // far plane
+        8000.0, // far plane
     );
 
+    // UPDATE CAMERA unifrom
     let view = Mat4::look_at_rh(camera.position, camera.position + camera.front, camera.up);
-    drop(camera);
-
     let view_proj = projection * view;
 
+    // update uniforms
     let uniforms = Uniforms {
         view_proj,
         time: state.start_date.timeIntervalSinceNow() as f32,
@@ -482,11 +520,23 @@ pub fn frame(view: &MTKView, state: &AppState) {
         );
     }
 
+    drop(camera);
+
+    unsafe {
+        encoder.setVertexBytes_length_atIndex(
+            uniforms_ptr.cast(),
+            std::mem::size_of_val(&uniforms),
+            0,
+        );
+    }
+
     encoder.setRenderPipelineState(&state.pipeline);
     encoder.setDepthStencilState(Some(&state.depth_stencil_state));
 
     //
     // Draw
+
+    // Meshes
     for mesh in &state.model.meshes {
         unsafe {
             if let Some(texture) = &mesh.texture {
