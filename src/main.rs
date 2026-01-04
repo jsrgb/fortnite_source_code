@@ -1,14 +1,14 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod platform;
+mod render;
 mod resource;
 
 // TODO: What?
 use objc2::AnyThread;
 
-use std::ptr::NonNull;
-
 use crate::platform::{Delegate, Ivars, KEYSTATE};
+use crate::render::{RenderPass, SinglePass, Uniforms};
 use crate::resource::{Asset, Buffer, BufferKind, Device, Mesh};
 
 use objc2::MainThreadOnly;
@@ -17,11 +17,11 @@ use std::cell::RefCell;
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2::{msg_send, MainThreadMarker};
+use objc2::{MainThreadMarker, msg_send};
 
 use glam::{Mat4, Vec3};
 
-use objc2_foundation::{ns_string, NSDate, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL};
+use objc2_foundation::{NSDate, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL, ns_string};
 
 // TODO: Move and improve
 const KEY_W: u16 = 13;
@@ -42,13 +42,6 @@ use objc2_app_kit::{
 use objc2_metal::*;
 
 use objc2_metal_kit::{MTKTextureLoader, MTKView};
-
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct Uniforms {
-    view_proj: Mat4,
-    time: f32,
-}
 
 // TODO: camera.rs?
 struct Camera {
@@ -89,14 +82,13 @@ const WINDOW_H: f64 = 600.0;
 pub struct AppState {
     start_date: Retained<NSDate>,
     pub device: Device,
-    pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
-    depth_stencil_state: Retained<ProtocolObject<dyn MTLDepthStencilState>>,
     model: Asset,
     // RefCell? In frame() an immutable reference to AppState is passed in.
     // But camera state needs to mutate when input is pressed
     // RefCell allows for mutable borrows at runtime, even when the data is immutable
     // Maybe move out of app state
     camera: RefCell<Camera>,
+    pass: SinglePass,
 }
 
 pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
@@ -349,19 +341,20 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         0.0,                                        // pitch
     );
 
+    let pass = SinglePass::new(pipeline_state, depth_stencil_state);
+
     let app_state = AppState {
         start_date: NSDate::now(),
         device: Device {
             device,
             command_queue,
         },
-        depth_stencil_state,
-        pipeline: pipeline_state,
         model: Asset {
             meshes: all_meshes,
             name: "Box".to_string(),
         },
         camera: RefCell::new(camera),
+        pass,
     };
     (app_state, window, view)
 }
@@ -448,52 +441,14 @@ pub fn frame(view: &MTKView, state: &AppState) {
         8000.0, // far plane
     );
 
-    // UPDATE CAMERA unifrom
+    // Update camera uniform
     let view = Mat4::look_at_rh(camera.position, camera.position + camera.front, camera.up);
     let view_proj = projection * view;
+    let time = state.start_date.timeIntervalSinceNow() as f32;
 
-    // update uniforms
-    let uniforms = Uniforms {
-        view_proj,
-        time: state.start_date.timeIntervalSinceNow() as f32,
-    };
-    let uniforms_ptr = NonNull::from(&uniforms);
+    let uniforms = Uniforms { view_proj, time };
 
-    unsafe {
-        encoder.setVertexBytes_length_atIndex(
-            uniforms_ptr.cast(),
-            std::mem::size_of_val(&uniforms),
-            0,
-        );
-    }
-
-    drop(camera);
-
-    unsafe {
-        encoder.setVertexBytes_length_atIndex(
-            uniforms_ptr.cast(),
-            std::mem::size_of_val(&uniforms),
-            0,
-        );
-    }
-
-    encoder.setRenderPipelineState(&state.pipeline);
-    encoder.setDepthStencilState(Some(&state.depth_stencil_state));
-
-    //
-    // Draw
-
-    // Meshes
-    for mesh in &state.model.meshes {
-        unsafe {
-            if let Some(texture) = &mesh.materials {
-                encoder.setFragmentTexture_atIndex(Some(texture), 0);
-            } else {
-                encoder.setFragmentTexture_atIndex(None, 0);
-            }
-        }
-        mesh.draw(&encoder);
-    }
+    state.pass.render(&encoder, &uniforms, &state.model, time);
 
     encoder.endEncoding();
     command_buffer.presentDrawable(ProtocolObject::from_ref(&*drawable));
