@@ -23,6 +23,7 @@ use glam::{Mat4, Vec3};
 
 use objc2_foundation::{NSDate, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL, ns_string};
 
+// TODO: Move and improve
 const KEY_W: u16 = 13;
 const KEY_A: u16 = 0;
 const KEY_S: u16 = 1;
@@ -30,8 +31,9 @@ const KEY_D: u16 = 2;
 const KEY_Q: u16 = 12;
 const KEY_E: u16 = 14;
 const KEY_SPC: u16 = 49;
-const KEY_LSHIFT: u16 = 3; // F key
-// TODO: Move and improve
+const KEY_C: u16 = 8;
+const KEY_R: u16 = 15;
+const KEY_F: u16 = 3;
 
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSWindow, NSWindowStyleMask,
@@ -110,6 +112,7 @@ struct Camera {
     front: Vec3,
     up: Vec3,
     yaw: f32,
+    pitch: f32,
 }
 
 const WINDOW_W: f64 = 800.0;
@@ -395,6 +398,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         front: Vec3::new(0.0, 0.0, -1.0), // Looking at -Z
         up: Vec3::new(0.0, 1.0, 0.0),
         yaw: -90.0,
+        pitch: 0.0,
     };
 
     let app_state = AppState {
@@ -421,11 +425,10 @@ pub fn frame(view: &MTKView, state: &AppState) {
 
     let move_speed = 4.0;
 
-    let pitch = 0.0;
     let direction = Vec3::new(
-        f32::cos(f32::to_radians(camera.yaw)) * f32::cos(f32::to_radians(pitch)),
-        f32::sin(f32::to_radians(pitch)),
-        f32::sin(f32::to_radians(camera.yaw)) * f32::cos(f32::to_radians(pitch)),
+        f32::cos(f32::to_radians(camera.yaw)) * f32::cos(f32::to_radians(camera.pitch)),
+        f32::sin(f32::to_radians(camera.pitch)),
+        f32::sin(f32::to_radians(camera.yaw)) * f32::cos(f32::to_radians(camera.pitch)),
     );
     let front = direction.normalize();
     camera.front = front;
@@ -447,16 +450,31 @@ pub fn frame(view: &MTKView, state: &AppState) {
     if keystate.contains(&KEY_SPC) {
         camera.position += up * move_speed;
     }
-    if keystate.contains(&KEY_LSHIFT) {
+    if keystate.contains(&KEY_C) {
         camera.position -= up * move_speed;
     }
 
-    let yaw_sens: f32 = 10.0;
+    let yaw_sens: f32 = 7.0;
+    let pitch_sens: f32 = 7.0;
     if keystate.contains(&KEY_Q) {
         camera.yaw -= yaw_sens;
     }
     if keystate.contains(&KEY_E) {
         camera.yaw += yaw_sens;
+    }
+
+    if keystate.contains(&KEY_F) {
+        camera.pitch -= pitch_sens;
+    }
+    if keystate.contains(&KEY_R) {
+        camera.pitch += pitch_sens;
+    }
+
+    if camera.pitch > 89.0 {
+        camera.pitch = 89.0;
+    }
+    if camera.pitch < -89.0 {
+        camera.pitch = -89.0;
     }
 
     drop(keystate);
