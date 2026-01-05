@@ -19,7 +19,7 @@ struct VSOut {
 
 vertex VSOut vertex_main(
       VertexIn in [[stage_in]],
-      constant Uniforms& uniforms [[buffer(0)]]
+      constant Uniforms& uniforms [[buffer(BufferKind_Uniforms)]]
   ) {
       VSOut out;
       out.position = uniforms.view_proj * float4(in.position, 1.0);

@@ -117,6 +117,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         mtk_view
     };
 
+    // TODO: move to resource.rs
     let pipeline_descriptor = MTLRenderPipelineDescriptor::new();
     unsafe {
         pipeline_descriptor
