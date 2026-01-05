@@ -11,7 +11,7 @@ use objc2::AnyThread;
 use crate::input::Key;
 use crate::platform::{Delegate, Ivars};
 use crate::render::{RenderPass, SinglePass, Uniforms};
-use crate::resource::{Asset, Buffer, BufferKind, Device, Mesh};
+use crate::resource::{Asset, Buffer, BufferKind, Device, Mesh, ShaderLibrary};
 
 use objc2::MainThreadOnly;
 
@@ -127,19 +127,13 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
     // init Metal Kit Texture Loader
     let mtk_tex_loader = MTKTextureLoader::initWithDevice(MTKTextureLoader::alloc(), &device);
 
-    // TODO: ShaderModule struct
-    // FIXME: absolute path
-    let url = { NSURL::fileURLWithPath(ns_string!("./src/shaders/pos_uv.metallib")) };
-    let library = device
-        .newLibraryWithURL_error(&url)
-        .expect("Failed to compile shaders");
-
-    let vertex_fn = library.newFunctionWithName(ns_string!("vertex_main"));
-    let frag_fn = library.newFunctionWithName(ns_string!("fragment_main"));
-
-    pipeline_descriptor.setVertexFunction(vertex_fn.as_deref());
-    pipeline_descriptor.setFragmentFunction(frag_fn.as_deref());
-
+    let shader_lib = ShaderLibrary::new(
+        String::from("Single pass shader library"),
+        String::from("./src/shaders/pos_uv.metallib"),
+        &device,
+    );
+    pipeline_descriptor.setVertexFunction(Some(shader_lib.vertex.as_ref()));
+    pipeline_descriptor.setFragmentFunction(Some(shader_lib.fragment.as_ref()));
     // Add depth stencil attachment
     pipeline_descriptor.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
 
