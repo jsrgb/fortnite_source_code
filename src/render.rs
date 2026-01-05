@@ -1,8 +1,4 @@
-// TODO: use metal::*;
-// drawing done here, the passes are described here
-
 use crate::resource::Asset;
-use crate::resource::Device;
 use glam::{Mat4, Vec3};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

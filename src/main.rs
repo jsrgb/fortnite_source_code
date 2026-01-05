@@ -1,5 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod input;
 mod platform;
 mod render;
 mod resource;
@@ -7,7 +8,8 @@ mod resource;
 // TODO: What?
 use objc2::AnyThread;
 
-use crate::platform::{Delegate, Ivars, KEYSTATE};
+use crate::input::Key;
+use crate::platform::{Delegate, Ivars};
 use crate::render::{RenderPass, SinglePass, Uniforms};
 use crate::resource::{Asset, Buffer, BufferKind, Device, Mesh};
 
@@ -24,17 +26,6 @@ use glam::{Mat4, Vec3};
 use objc2_foundation::{NSDate, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL, ns_string};
 
 // TODO: Move and improve
-const KEY_W: u16 = 13;
-const KEY_A: u16 = 0;
-const KEY_S: u16 = 1;
-const KEY_D: u16 = 2;
-const KEY_Q: u16 = 12;
-const KEY_E: u16 = 14;
-const KEY_SPC: u16 = 49;
-const KEY_C: u16 = 8;
-const KEY_R: u16 = 15;
-const KEY_F: u16 = 3;
-
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSWindow, NSWindowStyleMask,
 };
@@ -360,7 +351,6 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 }
 
 pub fn frame(view: &MTKView, state: &AppState) {
-    let keystate = KEYSTATE.lock().unwrap();
     let mut camera = state.camera.borrow_mut();
 
     let move_speed = 4.0;
@@ -375,38 +365,40 @@ pub fn frame(view: &MTKView, state: &AppState) {
     let right = front.cross(camera.up).normalize();
     let up = camera.up;
 
-    if keystate.contains(&KEY_W) {
+    // TODO: add a tiny event queue? :)
+    //
+    if Key::W.is_pressed() {
         camera.position += front * move_speed;
     }
-    if keystate.contains(&KEY_S) {
+    if Key::S.is_pressed() {
         camera.position -= front * move_speed;
     }
-    if keystate.contains(&KEY_A) {
+    if Key::A.is_pressed() {
         camera.position -= right * move_speed;
     }
-    if keystate.contains(&KEY_D) {
+    if Key::D.is_pressed() {
         camera.position += right * move_speed;
     }
-    if keystate.contains(&KEY_SPC) {
+    if Key::SPC.is_pressed() {
         camera.position += up * move_speed;
     }
-    if keystate.contains(&KEY_C) {
+    if Key::C.is_pressed() {
         camera.position -= up * move_speed;
     }
 
     let yaw_sens: f32 = 7.0;
     let pitch_sens: f32 = 7.0;
-    if keystate.contains(&KEY_Q) {
+    if Key::Q.is_pressed() {
         camera.yaw -= yaw_sens;
     }
-    if keystate.contains(&KEY_E) {
+    if Key::E.is_pressed() {
         camera.yaw += yaw_sens;
     }
 
-    if keystate.contains(&KEY_F) {
+    if Key::F.is_pressed() {
         camera.pitch -= pitch_sens;
     }
-    if keystate.contains(&KEY_R) {
+    if Key::R.is_pressed() {
         camera.pitch += pitch_sens;
     }
 
@@ -416,8 +408,6 @@ pub fn frame(view: &MTKView, state: &AppState) {
     if camera.pitch < -89.0 {
         camera.pitch = -89.0;
     }
-
-    drop(keystate);
 
     let Some(drawable) = view.currentDrawable() else {
         return;

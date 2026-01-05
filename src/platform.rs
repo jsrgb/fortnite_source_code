@@ -3,9 +3,11 @@
 use crate::{AppState, frame, init};
 use std::ptr;
 
+use crate::input::KEYSTATE;
+
 use objc2::DefinedClass;
 
-use std::{cell::RefCell, collections::HashSet, ptr::NonNull, sync::Mutex};
+use std::{cell::RefCell, ptr::NonNull};
 
 use objc2::define_class;
 use objc2::runtime::ProtocolObject;
@@ -17,10 +19,7 @@ use objc2_app_kit::{NSApplication, NSApplicationDelegate, NSEvent, NSEventMask, 
 use objc2_metal_kit::{MTKView, MTKViewDelegate};
 
 use block2::RcBlock;
-use once_cell::sync::Lazy;
 
-// Global keystate - accessible from anywhere
-pub static KEYSTATE: Lazy<Mutex<HashSet<u16>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 pub struct Ivars {
     pub state: RefCell<Option<AppState>>,
