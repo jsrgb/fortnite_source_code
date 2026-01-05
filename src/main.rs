@@ -70,6 +70,8 @@ impl Camera {
 const WINDOW_W: f64 = 800.0;
 const WINDOW_H: f64 = 600.0;
 
+const GLTF_NAME: &str = "Sponza";
+
 pub struct AppState {
     start_date: Retained<NSDate>,
     pub device: Device,
@@ -157,8 +159,8 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         .newDepthStencilStateWithDescriptor(&depth_stencil_descriptor)
         .expect("Failed to create depth stencil state");
 
-    let (document, buffers, images) =
-        gltf::import("./src/assets/Sponza.gltf").expect("could not open gltf");
+    let gltf_path = format!("./assets/{}/glTF/{}.gltf", GLTF_NAME, GLTF_NAME);
+    let (document, buffers, images) = gltf::import(gltf_path).expect("could not import glTF");
     assert_eq!(buffers.len(), document.buffers().count());
     assert_eq!(images.len(), document.images().count());
 
@@ -239,7 +241,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 
                 match image.source() {
                     gltf::image::Source::Uri { uri, .. } => {
-                        let full_path = format!("./src/assets/{}", uri);
+                        let full_path = format!("./assets/{}/glTF/{}", GLTF_NAME, uri);
                         let path_to_tex = NSURL::fileURLWithPath(&NSString::from_str(&full_path));
 
                         Some(unsafe {
