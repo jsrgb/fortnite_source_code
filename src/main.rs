@@ -16,12 +16,13 @@ use crate::resource::{Asset, Buffer, BufferKind, Device, Mesh, ShaderLibrary};
 use objc2::MainThreadOnly;
 
 use std::cell::RefCell;
+use std::fmt::format;
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{MainThreadMarker, msg_send};
 
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Vec3, Vec4};
 
 use objc2_foundation::{NSDate, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL, ns_string};
 
@@ -132,7 +133,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 
     let shader_lib = ShaderLibrary::new(
         String::from("Single pass shader library"),
-        String::from("./src/shaders/pos_uv.metallib"),
+        String::from("./src/shaders/transform.metallib"),
         &device,
     );
     pipeline_descriptor.setVertexFunction(Some(shader_lib.vertex.as_ref()));
@@ -149,7 +150,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 
     window.setContentView(Some(&view));
     window.center();
-    window.setTitle(ns_string!("aa"));
+    window.setTitle(ns_string!("fortnite_source_code_leaked"));
     window.makeKeyAndOrderFront(None);
 
     // Depth stencil
@@ -261,12 +262,15 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
             all_buffers.push(position_buffer);
             all_buffers.push(uv_buffer);
 
+            let model = Mat4::from_rotation_x(f32::to_radians(-15.0));
+
             let submesh = Mesh::new(
                 all_buffers,
                 index_buffer,
                 texture, // TODO: List of materials
                 indices.len(),
                 MTLPrimitiveType::Triangle,
+                model,
             );
 
             all_meshes.push(submesh);
@@ -433,7 +437,12 @@ pub fn frame(view: &MTKView, state: &AppState) {
     let view_proj = projection * view;
     let time = state.start_date.timeIntervalSinceNow() as f32;
 
-    let uniforms = Uniforms { view_proj, time };
+    let model = Mat4::ZERO;
+    let uniforms = Uniforms {
+        view_proj,
+        time,
+        model,
+    };
 
     state.pass.render(&encoder, &uniforms, &state.model, time);
 

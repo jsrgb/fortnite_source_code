@@ -1,6 +1,7 @@
+use glam::Mat4;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_foundation::{NSString, NSUInteger, NSURL, ns_string};
+use objc2_foundation::{ns_string, NSString, NSUInteger, NSURL};
 use objc2_metal::*;
 
 pub struct Device {
@@ -39,6 +40,7 @@ impl Buffer {
     }
 }
 
+// Mesh, Asset, should be omved somewhere else. leave this file for MTL resources
 pub struct Mesh {
     pub buffers: Vec<Buffer>,
     pub index_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
@@ -46,6 +48,7 @@ pub struct Mesh {
     pub materials: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
     pub index_count: usize,
     pub primitive: MTLPrimitiveType,
+    pub model: Mat4,
 }
 
 impl Mesh {
@@ -55,6 +58,7 @@ impl Mesh {
         material: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
         index_count: usize,
         primitive: MTLPrimitiveType,
+        model: Mat4,
     ) -> Self {
         Self {
             buffers,
@@ -62,6 +66,7 @@ impl Mesh {
             materials: material, // TODO:
             index_count,
             primitive,
+            model,
         }
     }
 
