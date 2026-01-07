@@ -10,23 +10,21 @@ use objc2::AnyThread;
 
 use crate::input::Key;
 use crate::platform::{Delegate, Ivars};
-use crate::render::{RenderPass, SinglePass, Uniforms};
-use crate::resource::{Asset, Buffer, BufferKind, Device, Mesh, ShaderLibrary};
+use crate::render::{Asset, Mesh, RenderPass, SinglePass, Uniforms};
+use crate::resource::{Buffer, BufferKind, Device, ShaderLibrary};
 
 use objc2::MainThreadOnly;
 
 use std::cell::RefCell;
-use std::fmt::format;
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2::{MainThreadMarker, msg_send};
+use objc2::{msg_send, MainThreadMarker};
 
-use glam::{Mat4, Vec3, Vec4};
+use glam::{Mat4, Vec3};
 
-use objc2_foundation::{NSDate, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL, ns_string};
+use objc2_foundation::{ns_string, NSDate, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL};
 
-// TODO: Move and improve
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSWindow, NSWindowStyleMask,
 };
