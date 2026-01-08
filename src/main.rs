@@ -135,6 +135,14 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 
     let mut all_meshes = Vec::new();
 
+    let mipmap_command_buffer = command_queue
+        .commandBuffer()
+        .expect("Failed to create mipmap command buffer");
+    let mipmap_blit_encoder = mipmap_command_buffer
+        .blitCommandEncoder()
+        .expect("Failed to create mipmap blit encoder");
+
+    // FIXME: This is kind of horible
     for mesh in document.meshes() {
         for primitive in mesh.primitives() {
             let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
@@ -213,11 +221,15 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
                         let full_path = format!("./assets/{}/glTF/{}", GLTF_NAME, uri);
                         let path_to_tex = NSURL::fileURLWithPath(&NSString::from_str(&full_path));
 
-                        Some(unsafe {
+                        let texture = unsafe {
                             mtk_tex_loader
                                 .newTextureWithContentsOfURL_options_error(&path_to_tex, None)
                                 .expect("Failed to load texture from file")
-                        })
+                        };
+
+                        // add command to enerate mipmaps
+                        mipmap_blit_encoder.generateMipmapsForTexture(&texture);
+                        Some(texture)
                     }
                     gltf::image::Source::View { .. } => None,
                 }
@@ -243,6 +255,9 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
             all_meshes.push(submesh);
         }
     }
+
+    mipmap_blit_encoder.endEncoding();
+    mipmap_command_buffer.commit();
 
     // TODO: Move to resource module
     // A MTLVertexDescriptor has attributes and layouts
