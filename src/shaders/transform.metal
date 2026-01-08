@@ -33,6 +33,11 @@ fragment float4 fragment_main(
     VSOut in [[stage_in]],
     texture2d<float> colorTexture [[texture(0)]]
 ) {
-    constexpr sampler textureSampler(mag_filter::linear, min_filter::linear, address::repeat);
+    constexpr sampler textureSampler(
+        mag_filter::linear,
+        min_filter::linear,
+        mip_filter::linear,
+        address::repeat
+    );
     return colorTexture.sample(textureSampler, in.texCoord);
 }
