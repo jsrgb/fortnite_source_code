@@ -7,6 +7,7 @@ mod render;
 mod resource;
 
 // TODO: What?
+use objc2::runtime::AnyObject;
 use objc2::AnyThread;
 
 use crate::camera::Camera;
@@ -25,7 +26,9 @@ use objc2::{msg_send, MainThreadMarker};
 
 use glam::{Mat4, Vec3};
 
-use objc2_foundation::{ns_string, NSDate, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL};
+use objc2_foundation::{
+    ns_string, NSDate, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL,
+};
 
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSWindow, NSWindowStyleMask,
@@ -33,7 +36,7 @@ use objc2_app_kit::{
 
 use objc2_metal::*;
 
-use objc2_metal_kit::{MTKTextureLoader, MTKView};
+use objc2_metal_kit::{MTKTextureLoader, MTKTextureLoaderOptionAllocateMipmaps, MTKView};
 
 const WINDOW_W: f64 = 800.0;
 const WINDOW_H: f64 = 600.0;
@@ -142,6 +145,12 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         .blitCommandEncoder()
         .expect("Failed to create mipmap blit encoder");
 
+    // AI wrote this part. TODO: Understand
+    let key = unsafe { MTKTextureLoaderOptionAllocateMipmaps };
+    let value = NSNumber::numberWithBool(true);
+    let options = NSDictionary::from_slices(&[key], &[&*value as &AnyObject]);
+    // end AI wrote this part
+
     // FIXME: This is kind of horible
     for mesh in document.meshes() {
         for primitive in mesh.primitives() {
@@ -223,12 +232,15 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 
                         let texture = unsafe {
                             mtk_tex_loader
-                                .newTextureWithContentsOfURL_options_error(&path_to_tex, None)
+                                .newTextureWithContentsOfURL_options_error(
+                                    &path_to_tex,
+                                    Some(&options),
+                                )
                                 .expect("Failed to load texture from file")
                         };
 
-                        // add command to enerate mipmaps
                         mipmap_blit_encoder.generateMipmapsForTexture(&texture);
+
                         Some(texture)
                     }
                     gltf::image::Source::View { .. } => None,
