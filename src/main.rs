@@ -1,5 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod camera;
 mod input;
 mod platform;
 mod render;
@@ -8,6 +9,7 @@ mod resource;
 // TODO: What?
 use objc2::AnyThread;
 
+use crate::camera::Camera;
 use crate::input::Key;
 use crate::platform::{Delegate, Ivars};
 use crate::render::{Asset, Mesh, RenderPass, SinglePass, Uniforms};
@@ -32,39 +34,6 @@ use objc2_app_kit::{
 use objc2_metal::*;
 
 use objc2_metal_kit::{MTKTextureLoader, MTKView};
-
-// TODO: camera.rs?
-struct Camera {
-    position: Vec3,
-    target: Vec3,
-    direction: Vec3,
-    front: Vec3,
-    up: Vec3,
-    yaw: f32,
-    pitch: f32,
-}
-
-impl Camera {
-    fn new(
-        position: Vec3,
-        target: Vec3,
-        direction: Vec3,
-        front: Vec3,
-        up: Vec3,
-        yaw: f32,
-        pitch: f32,
-    ) -> Self {
-        Self {
-            position,
-            target,
-            direction,
-            front,
-            up,
-            yaw,
-            pitch,
-        }
-    }
-}
 
 const WINDOW_W: f64 = 800.0;
 const WINDOW_H: f64 = 600.0;
