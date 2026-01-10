@@ -137,12 +137,6 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
     assert_eq!(images.len(), document.images().count());
 
     let mut all_meshes = Vec::new();
-    let mipmap_command_buffer = command_queue
-        .commandBuffer()
-        .expect("Failed to create mipmap command buffer");
-    let mipmap_blit_encoder = mipmap_command_buffer
-        .blitCommandEncoder()
-        .expect("Failed to create mipmap blit encoder");
 
     let key = unsafe { MTKTextureLoaderOptionAllocateMipmaps };
     let value = NSNumber::numberWithBool(true);
@@ -154,12 +148,6 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
     let mipmap_blit_encoder = mipmap_command_buffer
         .blitCommandEncoder()
         .expect("Failed to create mipmap blit encoder");
-
-    // AI wrote this part. TODO: Understand
-    let key = unsafe { MTKTextureLoaderOptionAllocateMipmaps };
-    let value = NSNumber::numberWithBool(true);
-    let options = NSDictionary::from_slices(&[key], &[&*value as &AnyObject]);
-    // end AI wrote this part
 
     // FIXME: This is kind of horible
     for mesh in document.meshes() {
