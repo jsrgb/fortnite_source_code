@@ -7,7 +7,6 @@ mod render;
 mod resource;
 
 // TODO: What?
-use objc2::runtime::AnyObject;
 use objc2::AnyThread;
 use objc2::runtime::AnyObject;
 
@@ -28,7 +27,7 @@ use objc2::{MainThreadMarker, msg_send};
 use glam::{Mat4, Vec3};
 
 use objc2_foundation::{
-    ns_string, NSDate, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL,
+    NSDate, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL, ns_string,
 };
 
 use objc2_app_kit::{
