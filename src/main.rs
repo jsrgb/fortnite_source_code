@@ -9,6 +9,7 @@ mod resource;
 // TODO: What?
 use objc2::runtime::AnyObject;
 use objc2::AnyThread;
+use objc2::runtime::AnyObject;
 
 use crate::camera::Camera;
 use crate::input::Key;
@@ -22,7 +23,7 @@ use std::cell::RefCell;
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2::{msg_send, MainThreadMarker};
+use objc2::{MainThreadMarker, msg_send};
 
 use glam::{Mat4, Vec3};
 
@@ -103,7 +104,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 
     let shader_lib = ShaderLibrary::new(
         String::from("Single pass shader library"),
-        String::from("./src/shaders/transform.metallib"),
+        String::from("./src/shaders/normals.metallib"),
         &device,
     );
     pipeline_descriptor.setVertexFunction(Some(shader_lib.vertex.as_ref()));
@@ -137,6 +138,16 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
     assert_eq!(images.len(), document.images().count());
 
     let mut all_meshes = Vec::new();
+    let mipmap_command_buffer = command_queue
+        .commandBuffer()
+        .expect("Failed to create mipmap command buffer");
+    let mipmap_blit_encoder = mipmap_command_buffer
+        .blitCommandEncoder()
+        .expect("Failed to create mipmap blit encoder");
+
+    let key = unsafe { MTKTextureLoaderOptionAllocateMipmaps };
+    let value = NSNumber::numberWithBool(true);
+    let options = NSDictionary::from_slices(&[key], &[&*value as &AnyObject]);
 
     let mipmap_command_buffer = command_queue
         .commandBuffer()
@@ -158,7 +169,9 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 
             let positions: Vec<[f32; 3]> = reader.read_positions().expect("No positions").collect();
 
-            let tex_coords: Vec<[f32; 2]> = reader
+            let normals: Vec<[f32; 3]> = reader.read_normals().expect("No normals").collect();
+
+            let uvs: Vec<[f32; 2]> = reader
                 .read_tex_coords(0)
                 .expect("no texture coordinates")
                 .into_f32()
@@ -170,22 +183,44 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
                 .into_u32()
                 .collect();
 
+            let num_vertices = positions.len();
+            let stride = std::mem::size_of::<[f32; 8]>();
+
             // allocate buffers
-            let position_buffer = Buffer::new(
+            // interleave all attributes into a single buffer
+            let buffer = Buffer::new(
                 &device,
-                positions.len(),
-                std::mem::size_of::<[f32; 3]>(),
+                num_vertices,
+                stride,
                 MTLResourceOptions::StorageModeShared,
                 BufferKind::POSITIONS,
             );
 
-            let uv_buffer = Buffer::new(
-                &device,
-                tex_coords.len(),
-                std::mem::size_of::<[f32; 2]>(),
-                MTLResourceOptions::StorageModeShared,
-                BufferKind::UV,
-            );
+            // fill the buffer with data
+            unsafe {
+                let contents = buffer.buffer.contents().as_ptr() as *mut u8;
+                for i in 0..num_vertices {
+                    let offset = i * stride;
+
+                    std::ptr::copy_nonoverlapping(
+                        positions[i].as_ptr() as *const u8,
+                        contents.add(offset + 0),
+                        12,
+                    );
+
+                    std::ptr::copy_nonoverlapping(
+                        normals[i].as_ptr() as *const u8,
+                        contents.add(offset + 12),
+                        12,
+                    );
+
+                    std::ptr::copy_nonoverlapping(
+                        uvs[i].as_ptr() as *const u8,
+                        contents.add(offset + 24),
+                        8,
+                    );
+                }
+            }
 
             // TODO: more generic buffer create?
             let index_buffer = device
@@ -194,25 +229,6 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
                     MTLResourceOptions::StorageModeShared,
                 )
                 .expect("Failed to create index buffer");
-
-            // fill them
-            unsafe {
-                let contents = position_buffer.buffer.contents().as_ptr() as *mut f32;
-                std::ptr::copy_nonoverlapping(
-                    positions.as_ptr() as *const f32,
-                    contents,
-                    positions.len() * 3,
-                );
-            }
-
-            unsafe {
-                let contents = uv_buffer.buffer.contents().as_ptr() as *mut f32;
-                std::ptr::copy_nonoverlapping(
-                    tex_coords.as_ptr() as *const f32,
-                    contents,
-                    tex_coords.len() * 2,
-                );
-            }
 
             unsafe {
                 let contents = index_buffer.contents().as_ptr() as *mut u32;
@@ -250,15 +266,17 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
             };
 
             let mut all_buffers = Vec::new();
-            all_buffers.push(position_buffer);
-            all_buffers.push(uv_buffer);
+            all_buffers.push(buffer);
 
             let model = Mat4::from_rotation_x(f32::to_radians(-15.0));
+
+            let mut materials = Vec::new();
+            materials.push(texture);
 
             let submesh = Mesh::new(
                 all_buffers,
                 index_buffer,
-                texture, // TODO: List of materials
+                materials,
                 indices.len(),
                 MTLPrimitiveType::Triangle,
                 model,
@@ -277,33 +295,25 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 
     // Attribute 0: position (float3) at offset 0 in buffer(1)
     unsafe {
-        let a0 = vertex_descriptor.attributes().objectAtIndexedSubscript(0);
-        a0.setFormat(MTLVertexFormat::Float3);
-        a0.setOffset(0);
-        a0.setBufferIndex(1);
+        let pos_attr = vertex_descriptor.attributes().objectAtIndexedSubscript(0);
+        pos_attr.setFormat(MTLVertexFormat::Float3);
+        pos_attr.setOffset(0);
+        pos_attr.setBufferIndex(1);
+
+        let norm_attr = vertex_descriptor.attributes().objectAtIndexedSubscript(1);
+        norm_attr.setFormat(MTLVertexFormat::Float3);
+        norm_attr.setOffset(12);
+        norm_attr.setBufferIndex(1);
+
+        let uv_attr = vertex_descriptor.attributes().objectAtIndexedSubscript(2);
+        uv_attr.setFormat(MTLVertexFormat::Float2);
+        uv_attr.setOffset(24);
+        uv_attr.setBufferIndex(1);
     }
 
-    // layouts describe how to fetch (stride,offset)
-    // Layout for buffer(1): stride = 24 bytes
-    // POS
     unsafe {
         let layout = vertex_descriptor.layouts().objectAtIndexedSubscript(1);
-        layout.setStride(std::mem::size_of::<[f32; 3]>() as NSUInteger); // 12
-        layout.setStepFunction(MTLVertexStepFunction::PerVertex);
-        layout.setStepRate(1);
-    }
-
-    // UV
-    unsafe {
-        let a1 = vertex_descriptor.attributes().objectAtIndexedSubscript(1);
-        a1.setFormat(MTLVertexFormat::Float2);
-        a1.setOffset(0);
-        a1.setBufferIndex(2);
-    }
-
-    unsafe {
-        let layout = vertex_descriptor.layouts().objectAtIndexedSubscript(2);
-        layout.setStride(std::mem::size_of::<[f32; 2]>() as NSUInteger);
+        layout.setStride(std::mem::size_of::<[f32; 8]>() as NSUInteger);
         layout.setStepFunction(MTLVertexStepFunction::PerVertex);
         layout.setStepRate(1);
     }

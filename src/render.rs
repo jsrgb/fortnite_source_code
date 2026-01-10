@@ -70,10 +70,12 @@ impl RenderPass for SinglePass {
                 );
             }
             unsafe {
-                if let Some(texture) = &mesh.materials {
-                    encoder.setFragmentTexture_atIndex(Some(texture), 0);
-                } else {
-                    encoder.setFragmentTexture_atIndex(None, 0);
+                for material in &mesh.materials {
+                    if let Some(texture) = material {
+                        encoder.setFragmentTexture_atIndex(Some(texture), 0);
+                    } else {
+                        encoder.setFragmentTexture_atIndex(None, 0);
+                    }
                 }
             }
             mesh.draw(encoder);
@@ -85,8 +87,8 @@ impl RenderPass for SinglePass {
 pub struct Mesh {
     pub buffers: Vec<Buffer>,
     pub index_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
-    // TODO: List of materials
-    pub materials: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
+    // TODO: Type alias or whatever its called again
+    pub materials: Vec<Option<Retained<ProtocolObject<dyn MTLTexture>>>>,
     pub index_count: usize,
     pub primitive: MTLPrimitiveType,
     pub model: Mat4,
@@ -96,7 +98,7 @@ impl Mesh {
     pub fn new(
         buffers: Vec<Buffer>,
         index_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
-        material: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
+        materials: Vec<Option<Retained<ProtocolObject<dyn MTLTexture>>>>,
         index_count: usize,
         primitive: MTLPrimitiveType,
         model: Mat4,
@@ -104,7 +106,7 @@ impl Mesh {
         Self {
             buffers,
             index_buffer,
-            materials: material, // TODO:
+            materials,
             index_count,
             primitive,
             model,
