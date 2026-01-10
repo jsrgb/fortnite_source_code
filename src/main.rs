@@ -148,6 +148,20 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
     let value = NSNumber::numberWithBool(true);
     let options = NSDictionary::from_slices(&[key], &[&*value as &AnyObject]);
 
+    let mipmap_command_buffer = command_queue
+        .commandBuffer()
+        .expect("Failed to create mipmap command buffer");
+    let mipmap_blit_encoder = mipmap_command_buffer
+        .blitCommandEncoder()
+        .expect("Failed to create mipmap blit encoder");
+
+    // AI wrote this part. TODO: Understand
+    let key = unsafe { MTKTextureLoaderOptionAllocateMipmaps };
+    let value = NSNumber::numberWithBool(true);
+    let options = NSDictionary::from_slices(&[key], &[&*value as &AnyObject]);
+    // end AI wrote this part
+
+    // FIXME: This is kind of horible
     for mesh in document.meshes() {
         for primitive in mesh.primitives() {
             let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
@@ -241,6 +255,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
                         };
 
                         mipmap_blit_encoder.generateMipmapsForTexture(&texture);
+
                         Some(texture)
                     }
                     gltf::image::Source::View { .. } => None,
