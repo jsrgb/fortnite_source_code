@@ -17,7 +17,7 @@ fn main() {
     }
 
     let status = Command::new("xcrun")
-        .args(["-sdk", "macosx", "metalib", air_path, "-o", metallib_path])
+        .args(["-sdk", "macosx", "metallib", air_path, "-o", metallib_path])
         .status()
         .expect("Failed to link metallib");
 
