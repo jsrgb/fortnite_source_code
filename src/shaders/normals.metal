@@ -27,7 +27,6 @@ vertex VSOut vertex_main(
       out.position =  uniforms.view_proj * uniforms.model * float4(in.position, 1.0);
       out.texCoord = in.texCoord;
       return out;
-      
   }
 
 

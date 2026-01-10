@@ -8,6 +8,7 @@ mod resource;
 
 // TODO: What?
 use objc2::AnyThread;
+use objc2::runtime::AnyObject;
 
 use crate::camera::Camera;
 use crate::input::Key;
@@ -25,7 +26,9 @@ use objc2::{MainThreadMarker, msg_send};
 
 use glam::{Mat4, Vec3};
 
-use objc2_foundation::{NSDate, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL, ns_string};
+use objc2_foundation::{
+    NSDate, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL, ns_string,
+};
 
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSWindow, NSWindowStyleMask,
@@ -33,7 +36,7 @@ use objc2_app_kit::{
 
 use objc2_metal::*;
 
-use objc2_metal_kit::{MTKTextureLoader, MTKView};
+use objc2_metal_kit::{MTKTextureLoader, MTKTextureLoaderOptionAllocateMipmaps, MTKView};
 
 const WINDOW_W: f64 = 800.0;
 const WINDOW_H: f64 = 600.0;
@@ -134,6 +137,16 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
     assert_eq!(images.len(), document.images().count());
 
     let mut all_meshes = Vec::new();
+    let mipmap_command_buffer = command_queue
+        .commandBuffer()
+        .expect("Failed to create mipmap command buffer");
+    let mipmap_blit_encoder = mipmap_command_buffer
+        .blitCommandEncoder()
+        .expect("Failed to create mipmap blit encoder");
+
+    let key = unsafe { MTKTextureLoaderOptionAllocateMipmaps };
+    let value = NSNumber::numberWithBool(true);
+    let options = NSDictionary::from_slices(&[key], &[&*value as &AnyObject]);
 
     for mesh in document.meshes() {
         for primitive in mesh.primitives() {
@@ -218,11 +231,17 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
                         let full_path = format!("./assets/{}/glTF/{}", GLTF_NAME, uri);
                         let path_to_tex = NSURL::fileURLWithPath(&NSString::from_str(&full_path));
 
-                        Some(unsafe {
+                        let texture = unsafe {
                             mtk_tex_loader
-                                .newTextureWithContentsOfURL_options_error(&path_to_tex, None)
+                                .newTextureWithContentsOfURL_options_error(
+                                    &path_to_tex,
+                                    Some(&options),
+                                )
                                 .expect("Failed to load texture from file")
-                        })
+                        };
+
+                        mipmap_blit_encoder.generateMipmapsForTexture(&texture);
+                        Some(texture)
                     }
                     gltf::image::Source::View { .. } => None,
                 }
@@ -250,6 +269,9 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
             all_meshes.push(submesh);
         }
     }
+
+    mipmap_blit_encoder.endEncoding();
+    mipmap_command_buffer.commit();
 
     // TODO: Move to resource module
     // A MTLVertexDescriptor has attributes and layouts
