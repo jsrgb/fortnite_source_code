@@ -231,10 +231,13 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 
             let model = Mat4::from_rotation_x(f32::to_radians(-15.0));
 
+            let mut materials = Vec::new();
+            materials.push(texture);
+
             let submesh = Mesh::new(
                 all_buffers,
                 index_buffer,
-                texture, // TODO: List of materials
+                materials,
                 indices.len(),
                 MTLPrimitiveType::Triangle,
                 model,
