@@ -221,8 +221,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 
             let material = primitive.material();
 
-            let texture = if let Some(tex) = material.pbr_metallic_roughness().base_color_texture()
-            {
+            let albedo = if let Some(tex) = material.pbr_metallic_roughness().base_color_texture() {
                 let image = tex.texture().source();
 
                 match image.source() {
@@ -238,7 +237,32 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
                                 )
                                 .expect("Failed to load texture from file")
                         };
+                        mipmap_blit_encoder.generateMipmapsForTexture(&texture);
 
+                        Some(texture)
+                    }
+                    gltf::image::Source::View { .. } => None,
+                }
+            } else {
+                None
+            };
+
+            let normals = if let Some(tex) = material.normal_texture() {
+                let image = tex.texture().source();
+
+                match image.source() {
+                    gltf::image::Source::Uri { uri, .. } => {
+                        let full_path = format!("./assets/{}/glTF/{}", GLTF_NAME, uri);
+                        let path_to_tex = NSURL::fileURLWithPath(&NSString::from_str(&full_path));
+
+                        let texture = unsafe {
+                            mtk_tex_loader
+                                .newTextureWithContentsOfURL_options_error(
+                                    &path_to_tex,
+                                    Some(&options),
+                                )
+                                .expect("Failed to load texture from file")
+                        };
                         mipmap_blit_encoder.generateMipmapsForTexture(&texture);
 
                         Some(texture)
@@ -255,10 +279,15 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 
             let model = Mat4::from_rotation_x(f32::to_radians(-15.0));
 
+            let mut materials = Vec::new();
+
+            materials.push(normals);
+            materials.push(albedo);
+
             let submesh = Mesh::new(
                 all_buffers,
                 index_buffer,
-                texture, // TODO: List of materials
+                materials,
                 indices.len(),
                 MTLPrimitiveType::Triangle,
                 model,
