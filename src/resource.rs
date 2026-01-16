@@ -11,7 +11,6 @@ pub struct Device {
 #[derive(Copy, Clone)]
 pub enum BufferKind {
     POSITIONS = 1,
-    UV = 2,
 }
 
 pub struct Buffer {
@@ -42,7 +41,7 @@ impl Buffer {
 pub struct ShaderLibrary {
     pub vertex: Retained<ProtocolObject<dyn MTLFunction>>,
     pub fragment: Retained<ProtocolObject<dyn MTLFunction>>,
-    name: String,
+    _name: String,
 }
 
 impl ShaderLibrary {
@@ -68,7 +67,48 @@ impl ShaderLibrary {
         Self {
             vertex: vertex_fn,
             fragment: fragment_fn,
-            name,
+            _name: name,
         }
+    }
+}
+
+pub struct VertexAttribute {
+    pub format: MTLVertexFormat,
+    pub offset: u8,
+    pub index: u8,
+    pub buffer_id: u8,
+}
+
+pub struct VertexDescriptor {
+    pub attributes: Vec<VertexAttribute>,
+}
+
+impl VertexDescriptor {
+    pub fn new(attributes: Vec<VertexAttribute>) -> Retained<MTLVertexDescriptor> {
+        let _desc = MTLVertexDescriptor::new();
+
+        unsafe {
+            for attr in attributes {
+                let a = _desc
+                    .attributes()
+                    .objectAtIndexedSubscript(attr.index as NSUInteger);
+                a.setFormat(attr.format);
+                a.setOffset(attr.offset as NSUInteger);
+                a.setBufferIndex(attr.buffer_id as NSUInteger);
+
+                // TODO: track stride here
+            }
+        }
+
+        let stride = std::mem::size_of::<[f32; 8]>() as NSUInteger;
+
+        unsafe {
+            let layout = _desc.layouts().objectAtIndexedSubscript(1);
+            layout.setStride(stride);
+            layout.setStepFunction(MTLVertexStepFunction::PerVertex);
+            layout.setStepRate(1);
+        }
+
+        return _desc;
     }
 }

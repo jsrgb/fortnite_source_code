@@ -1,11 +1,11 @@
-use glam::{Mat4, Vec3};
+use glam::Mat4;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_foundation::{ns_string, NSString, NSUInteger, NSURL};
+use objc2_foundation::NSUInteger;
 use objc2_metal::*;
 use std::ptr::NonNull;
 
-use crate::resource::{Buffer, BufferKind};
+use crate::resource::Buffer;
 
 #[derive(Copy, Clone)]
 #[repr(C)]
@@ -50,7 +50,7 @@ impl RenderPass for SinglePass {
         encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
         uniforms: &Uniforms,
         model: &Asset,
-        time: f32,
+        _time: f32,
     ) {
         encoder.setRenderPipelineState(&self.pipeline);
         encoder.setDepthStencilState(Some(&self.depth_stencil_state));
@@ -138,5 +138,5 @@ pub struct Asset {
     // TODO: constructors
     pub meshes: Vec<Mesh>,
     // TODO: materials
-    pub name: String,
+    pub _name: String,
 }

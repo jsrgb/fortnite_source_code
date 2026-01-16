@@ -14,7 +14,9 @@ use crate::camera::Camera;
 use crate::input::Key;
 use crate::platform::{Delegate, Ivars};
 use crate::render::{Asset, Mesh, RenderPass, SinglePass, Uniforms};
-use crate::resource::{Buffer, BufferKind, Device, ShaderLibrary};
+use crate::resource::{
+    Buffer, BufferKind, Device, ShaderLibrary, VertexAttribute, VertexDescriptor,
+};
 
 use objc2::MainThreadOnly;
 
@@ -255,7 +257,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
             let mut all_buffers = Vec::new();
             all_buffers.push(buffer);
 
-            let model = Mat4::from_rotation_x(f32::to_radians(-15.0));
+            let model = Mat4::IDENTITY;
 
             let mut materials = Vec::new();
             materials.push(texture);
@@ -278,32 +280,26 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 
     // TODO: Move to resource module
     // A MTLVertexDescriptor has attributes and layouts
-    let vertex_descriptor = MTLVertexDescriptor::new();
-
-    // Attribute 0: position (float3) at offset 0 in buffer(1)
-    unsafe {
-        let pos_attr = vertex_descriptor.attributes().objectAtIndexedSubscript(0);
-        pos_attr.setFormat(MTLVertexFormat::Float3);
-        pos_attr.setOffset(0);
-        pos_attr.setBufferIndex(1);
-
-        let norm_attr = vertex_descriptor.attributes().objectAtIndexedSubscript(1);
-        norm_attr.setFormat(MTLVertexFormat::Float3);
-        norm_attr.setOffset(12);
-        norm_attr.setBufferIndex(1);
-
-        let uv_attr = vertex_descriptor.attributes().objectAtIndexedSubscript(2);
-        uv_attr.setFormat(MTLVertexFormat::Float2);
-        uv_attr.setOffset(24);
-        uv_attr.setBufferIndex(1);
-    }
-
-    unsafe {
-        let layout = vertex_descriptor.layouts().objectAtIndexedSubscript(1);
-        layout.setStride(std::mem::size_of::<[f32; 8]>() as NSUInteger);
-        layout.setStepFunction(MTLVertexStepFunction::PerVertex);
-        layout.setStepRate(1);
-    }
+    let vertex_descriptor = VertexDescriptor::new(vec![
+        VertexAttribute {
+            format: MTLVertexFormat::Float3,
+            offset: 0,
+            index: 0,
+            buffer_id: 1,
+        },
+        VertexAttribute {
+            format: MTLVertexFormat::Float3,
+            offset: 12,
+            index: 1,
+            buffer_id: 1,
+        },
+        VertexAttribute {
+            format: MTLVertexFormat::Float2,
+            offset: 24,
+            index: 2,
+            buffer_id: 1,
+        },
+    ]);
 
     // Attached vertex spec to pipeline
     pipeline_descriptor.setVertexDescriptor(Some(&vertex_descriptor));
@@ -313,15 +309,12 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         .expect("Failed to create pipeline state");
 
     let cam_position = Vec3::new(0.0, 10.0, 0.0);
-    let cam_target = Vec3::new(0.0, 0.0, 0.0);
     let camera = Camera::new(
         cam_position,
-        cam_target,
-        Vec3::normalize(cam_position - cam_target), // direction
-        Vec3::new(0.0, 0.0, -1.0),                  // front, Looking at -Z
-        Vec3::new(0.0, 1.0, 0.0),                   // up
-        -90.0,                                      // yaw
-        0.0,                                        // pitch
+        Vec3::new(0.0, 0.0, -1.0), // front, Looking at -Z
+        Vec3::new(0.0, 1.0, 0.0),  // up
+        -90.0,                     // yaw
+        0.0,                       // pitch
     );
 
     let pass = SinglePass::new(pipeline_state, depth_stencil_state);
@@ -334,7 +327,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         },
         model: Asset {
             meshes: all_meshes,
-            name: "Box".to_string(),
+            _name: "Box".to_string(),
         },
         camera: RefCell::new(camera),
         pass,
