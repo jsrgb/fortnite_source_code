@@ -13,7 +13,7 @@ use objc2::runtime::AnyObject;
 use crate::camera::Camera;
 use crate::input::Key;
 use crate::platform::{Delegate, Ivars};
-use crate::render::{Asset, Mesh, RenderPass, SinglePass, Uniforms};
+use crate::render::{create_cube_mesh, Asset, Mesh, RenderPass, SinglePass, SkyboxPass, Uniforms};
 use crate::resource::{
     Buffer, BufferKind, Device, ShaderLibrary, VertexAttribute, VertexDescriptor,
 };
@@ -55,6 +55,8 @@ pub struct AppState {
     // Maybe move out of app state
     camera: RefCell<Camera>,
     pass: SinglePass,
+    // Boxed to avoid alignment issues in objc2 Ivars (alignment >8 not supported)
+    skybox: Box<SkyboxPass>,
 }
 
 pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
@@ -319,6 +321,125 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 
     let pass = SinglePass::new(pipeline_state, depth_stencil_state);
 
+    // ===== Skybox initialization =====
+
+    // Load skybox shader using existing helper
+    let skybox_shader_lib = ShaderLibrary::new(
+        String::from("Skybox shader library"),
+        String::from("./src/shaders/skybox.metallib"),
+        &device,
+    );
+
+    // Create skybox vertex descriptor (only position attribute)
+    let skybox_vertex_descriptor = MTLVertexDescriptor::new();
+    unsafe {
+        let attr = skybox_vertex_descriptor
+            .attributes()
+            .objectAtIndexedSubscript(0);
+        attr.setFormat(MTLVertexFormat::Float3);
+        attr.setOffset(0);
+        attr.setBufferIndex(1);
+
+        let layout = skybox_vertex_descriptor.layouts().objectAtIndexedSubscript(1);
+        layout.setStride(12); // 3 floats * 4 bytes
+        layout.setStepFunction(MTLVertexStepFunction::PerVertex);
+        layout.setStepRate(1);
+    }
+
+    // Create skybox pipeline
+    let skybox_pipeline_descriptor = MTLRenderPipelineDescriptor::new();
+    unsafe {
+        skybox_pipeline_descriptor
+            .colorAttachments()
+            .objectAtIndexedSubscript(0)
+            .setPixelFormat(view.colorPixelFormat());
+    }
+    skybox_pipeline_descriptor.setVertexFunction(Some(&skybox_shader_lib.vertex));
+    skybox_pipeline_descriptor.setFragmentFunction(Some(&skybox_shader_lib.fragment));
+    skybox_pipeline_descriptor.setVertexDescriptor(Some(&skybox_vertex_descriptor));
+    skybox_pipeline_descriptor.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
+
+    let skybox_pipeline_state = device
+        .newRenderPipelineStateWithDescriptor_error(&skybox_pipeline_descriptor)
+        .expect("Failed to create skybox pipeline state");
+
+    // Create skybox depth stencil state (depth write disabled)
+    let skybox_depth_descriptor = MTLDepthStencilDescriptor::new();
+    skybox_depth_descriptor.setDepthCompareFunction(MTLCompareFunction::LessEqual);
+    skybox_depth_descriptor.setDepthWriteEnabled(false); // Don't write depth for skybox
+    let skybox_depth_state = device
+        .newDepthStencilStateWithDescriptor(&skybox_depth_descriptor)
+        .expect("Failed to create skybox depth stencil state");
+
+    // Load cube map textures
+    let cube_texture = {
+        let texture_descriptor = unsafe {
+            MTLTextureDescriptor::textureCubeDescriptorWithPixelFormat_size_mipmapped(
+                MTLPixelFormat::BGRA8Unorm,
+                2048,
+                false,
+            )
+        };
+        texture_descriptor.setUsage(MTLTextureUsage::ShaderRead);
+        texture_descriptor.setStorageMode(MTLStorageMode::Private);
+
+        let cube_tex = device
+            .newTextureWithDescriptor(&texture_descriptor)
+            .expect("Failed to create cube texture");
+
+        // Load each face
+        let face_names = ["posx", "negx", "posy", "negy", "posz", "negz"];
+        for (slice, name) in face_names.iter().enumerate() {
+            let texture_path = format!("./assets/skybox/Maskonaive/{}.jpg", name);
+            let path = NSString::from_str(&texture_path);
+            let url = NSURL::fileURLWithPath(&path);
+
+            let temp_texture = unsafe {
+                mtk_tex_loader
+                    .newTextureWithContentsOfURL_options_error(&url, None)
+                    .expect(&format!("Failed to load skybox texture: {}", name))
+            };
+
+            // Copy to cube texture slice
+            let blit_command_buffer = command_queue
+                .commandBuffer()
+                .expect("Failed to create blit command buffer");
+            let blit_encoder = blit_command_buffer
+                .blitCommandEncoder()
+                .expect("Failed to create blit encoder");
+
+            unsafe {
+                blit_encoder.copyFromTexture_sourceSlice_sourceLevel_toTexture_destinationSlice_destinationLevel_sliceCount_levelCount(
+                    &temp_texture,
+                    0,
+                    0,
+                    &cube_tex,
+                    slice,
+                    0,
+                    1,
+                    1,
+                );
+            }
+
+            blit_encoder.endEncoding();
+            blit_command_buffer.commit();
+            blit_command_buffer.waitUntilCompleted();
+        }
+
+        cube_tex
+    };
+
+    // Create cube mesh
+    let cube_mesh = create_cube_mesh(&device);
+
+    // Create skybox pass
+    let skybox = SkyboxPass::new(
+        skybox_pipeline_state,
+        skybox_depth_state,
+        cube_mesh,
+        cube_texture,
+    );
+
     let app_state = AppState {
         start_date: NSDate::now(),
         device: Device {
@@ -331,6 +452,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         },
         camera: RefCell::new(camera),
         pass,
+        skybox: Box::new(skybox),
     };
     (app_state, window, view)
 }
@@ -427,6 +549,13 @@ pub fn frame(view: &MTKView, state: &AppState) {
         time,
         model,
     };
+
+    // Render skybox first (before scene, with depth write disabled)
+    // Remove translation from view matrix so skybox stays centered on camera
+    let (_, rotation, _) = view.to_scale_rotation_translation();
+    let view_no_translation = Mat4::from_quat(rotation);
+    let skybox_view_proj = projection * view_no_translation;
+    state.skybox.render(&encoder, skybox_view_proj);
 
     state.pass.render(&encoder, &uniforms, &state.model, time);
 
