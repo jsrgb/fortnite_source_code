@@ -5,10 +5,11 @@ mod input;
 mod platform;
 mod render;
 mod resource;
+mod world;
 
 // TODO: What?
-use objc2::AnyThread;
 use objc2::runtime::AnyObject;
+use objc2::AnyThread;
 
 use crate::camera::Camera;
 use crate::input::Key;
@@ -17,6 +18,7 @@ use crate::render::{create_cube_mesh, Asset, Mesh, RenderPass, SinglePass, Skybo
 use crate::resource::{
     Buffer, BufferKind, Device, ShaderLibrary, VertexAttribute, VertexDescriptor,
 };
+use crate::world::{Skybox, World};
 
 use objc2::MainThreadOnly;
 
@@ -24,12 +26,12 @@ use std::cell::RefCell;
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2::{MainThreadMarker, msg_send};
+use objc2::{msg_send, MainThreadMarker};
 
 use glam::{Mat4, Vec3};
 
 use objc2_foundation::{
-    NSDate, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL, ns_string,
+    ns_string, NSDate, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL,
 };
 
 use objc2_app_kit::{
@@ -48,15 +50,13 @@ const GLTF_NAME: &str = "Sponza";
 pub struct AppState {
     start_date: Retained<NSDate>,
     pub device: Device,
-    model: Asset,
     // RefCell? In frame() an immutable reference to AppState is passed in.
     // But camera state needs to mutate when input is pressed
     // RefCell allows for mutable borrows at runtime, even when the data is immutable
     // Maybe move out of app state
+    world: Box<World>,
     camera: RefCell<Camera>,
-    pass: SinglePass,
-    // Boxed to avoid alignment issues in objc2 Ivars (alignment >8 not supported)
-    skybox: Box<SkyboxPass>,
+    passes: Vec<Box<dyn RenderPass>>,
 }
 
 pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
@@ -319,7 +319,10 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         0.0,                       // pitch
     );
 
-    let pass = SinglePass::new(pipeline_state, depth_stencil_state);
+    let pass = SinglePass {
+        pipeline: pipeline_state,
+        depth_stencil_state,
+    };
 
     // ===== Skybox initialization =====
 
@@ -340,7 +343,9 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         attr.setOffset(0);
         attr.setBufferIndex(1);
 
-        let layout = skybox_vertex_descriptor.layouts().objectAtIndexedSubscript(1);
+        let layout = skybox_vertex_descriptor
+            .layouts()
+            .objectAtIndexedSubscript(1);
         layout.setStride(12); // 3 floats * 4 bytes
         layout.setStepFunction(MTLVertexStepFunction::PerVertex);
         layout.setStepRate(1);
@@ -433,26 +438,33 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
     let cube_mesh = create_cube_mesh(&device);
 
     // Create skybox pass
-    let skybox = SkyboxPass::new(
-        skybox_pipeline_state,
-        skybox_depth_state,
+    let skybox = SkyboxPass {
+        pipeline: skybox_pipeline_state,
+        depth_stencil_state: skybox_depth_state,
         cube_mesh,
         cube_texture,
-    );
+    };
 
+    let skyb = Skybox {
+        mesh: cube_mesh,
+        texture: cube_texture,
+    };
+
+    let world = World {
+        meshes: all_meshes,
+        skybox: Some(skyb),
+    };
+
+    // create
     let app_state = AppState {
         start_date: NSDate::now(),
         device: Device {
             device,
             command_queue,
         },
-        model: Asset {
-            meshes: all_meshes,
-            _name: "Box".to_string(),
-        },
+        world: Box::new(world),
         camera: RefCell::new(camera),
-        pass,
-        skybox: Box::new(skybox),
+        passes: vec![Box::new(pass), Box::new(skybox)],
     };
     (app_state, window, view)
 }
@@ -555,9 +567,11 @@ pub fn frame(view: &MTKView, state: &AppState) {
     let (_, rotation, _) = view.to_scale_rotation_translation();
     let view_no_translation = Mat4::from_quat(rotation);
     let skybox_view_proj = projection * view_no_translation;
-    state.skybox.render(&encoder, skybox_view_proj);
+    //state.skybox.render(&encoder, skybox_view_proj);
 
-    state.pass.render(&encoder, &uniforms, &state.model, time);
+    for pass in &state.passes {
+        pass.render(&state.world, &state.camera, encoder);
+    }
 
     encoder.endEncoding();
     command_buffer.presentDrawable(ProtocolObject::from_ref(&*drawable));
