@@ -36,17 +36,59 @@ impl RenderPass for SinglePass {
     fn render(
         &self,
         world: &World,
-        _camera: &Camera,
+        camera: &Camera,
         encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
     ) {
-        // Draw sky box
-        // Draw meshes
-        // upload camera unit
+        encoder.setRenderPipelineState(&self.pipeline);
+        encoder.setDepthStencilState(Some(&self.depth_stencil_state));
+
+        let view_proj = camera.view_proj(60.0, 800.0 / 600.0, 0.025, 8000.0);
+
         for mesh in &world.meshes {
+            // Build per-mesh uniforms (model matrix differs per mesh)
+            let uniforms = Uniforms {
+                view_proj,
+                model: mesh.model,
+                time: 0.0, // TODO: pass time if needed
+            };
+
+            unsafe {
+                encoder.setVertexBytes_length_atIndex(
+                    NonNull::from(&uniforms).cast(),
+                    std::mem::size_of::<Uniforms>(),
+                    0,
+                );
+            }
+
+            // Bind texture if mesh has one
+            for material in &mesh.materials {
+                unsafe {
+                    encoder.setFragmentTexture_atIndex(material.as_ref().map(|t| &**t), 0);
+                }
+            }
+
             mesh.draw(encoder);
         }
     }
 }
+
+// impl RenderPass for SinglePass {
+//     fn render(
+//         &self,
+//         world: &World,
+//         _camera: &Camera,
+//         encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+//     ) {
+//         encoder.setRenderPipelineState(&self.pipeline);
+//         encoder.setDepthStencilState(Some(&self.depth_stencil_state));
+//         // Draw sky box
+//         // Draw meshes
+//         // upload camera unit
+//         for mesh in &world.meshes {
+//             mesh.draw(encoder);
+//         }
+//     }
+// }
 
 // impl SinglePass {
 //     pub fn new(
@@ -60,43 +102,43 @@ impl RenderPass for SinglePass {
 //     }
 // }
 
-impl RenderPass for SinglePass {
-    fn render(
-        &self,
-        encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
-        uniforms: &Uniforms,
-        model: &Asset,
-    ) {
-        encoder.setRenderPipelineState(&self.pipeline);
-        encoder.setDepthStencilState(Some(&self.depth_stencil_state));
+// impl RenderPass for SinglePass {
+//     fn render(
+//         &self,
+//         encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+//         uniforms: &Uniforms,
+//         model: &Asset,
+//     ) {
+//         encoder.setRenderPipelineState(&self.pipeline);
+//         encoder.setDepthStencilState(Some(&self.depth_stencil_state));
 
-        for mesh in &model.meshes {
-            unsafe {
-                // uplaod uniforms
-                let m_uniforms = Uniforms {
-                    view_proj: uniforms.view_proj,
-                    time: uniforms.time,
-                    model: mesh.model,
-                };
-                encoder.setVertexBytes_length_atIndex(
-                    NonNull::from(&m_uniforms).cast(),
-                    std::mem::size_of_val(&m_uniforms),
-                    0,
-                );
-            }
-            unsafe {
-                for material in &mesh.materials {
-                    if let Some(texture) = material {
-                        encoder.setFragmentTexture_atIndex(Some(texture), 0);
-                    } else {
-                        encoder.setFragmentTexture_atIndex(None, 0);
-                    }
-                }
-            }
-            mesh.draw(encoder);
-        }
-    }
-}
+//         for mesh in &model.meshes {
+//             unsafe {
+//                 // uplaod uniforms
+//                 let m_uniforms = Uniforms {
+//                     view_proj: uniforms.view_proj,
+//                     time: uniforms.time,
+//                     model: mesh.model,
+//                 };
+//                 encoder.setVertexBytes_length_atIndex(
+//                     NonNull::from(&m_uniforms).cast(),
+//                     std::mem::size_of_val(&m_uniforms),
+//                     0,
+//                 );
+//             }
+//             unsafe {
+//                 for material in &mesh.materials {
+//                     if let Some(texture) = material {
+//                         encoder.setFragmentTexture_atIndex(Some(texture), 0);
+//                     } else {
+//                         encoder.setFragmentTexture_atIndex(None, 0);
+//                     }
+//                 }
+//             }
+//             mesh.draw(encoder);
+//         }
+//     }
+// }
 
 pub struct SkyboxPass {
     pub pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
@@ -105,15 +147,15 @@ pub struct SkyboxPass {
     pub cube_texture: Retained<ProtocolObject<dyn MTLTexture>>,
 }
 
-impl RenderPass for SkyboxPass {
-    fn render(
-        &self,
-        encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
-        uniforms: &Uniforms,
-        model: &Asset,
-    ) {
-    }
-}
+// impl RenderPass for SkyboxPass {
+//     fn render(
+//         &self,
+//         encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+//         uniforms: &Uniforms,
+//         model: &Asset,
+//     ) {
+//     }
+// }
 
 // impl SkyboxPass {
 //     pub fn new(

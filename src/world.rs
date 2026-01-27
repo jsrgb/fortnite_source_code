@@ -11,7 +11,7 @@ pub struct Skybox {
 
 pub struct World {
     pub meshes: Vec<Mesh>,
-    pub skybox: Option<Skybox>,
+    //pub skybox: Option<Skybox>,
     // lights
     // transforms
 }

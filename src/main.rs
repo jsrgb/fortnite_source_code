@@ -8,13 +8,13 @@ mod resource;
 mod world;
 
 // TODO: What?
-use objc2::runtime::AnyObject;
 use objc2::AnyThread;
+use objc2::runtime::AnyObject;
 
 use crate::camera::Camera;
 use crate::input::Key;
 use crate::platform::{Delegate, Ivars};
-use crate::render::{create_cube_mesh, Asset, Mesh, RenderPass, SinglePass, SkyboxPass, Uniforms};
+use crate::render::{Asset, Mesh, RenderPass, SinglePass, SkyboxPass, Uniforms, create_cube_mesh};
 use crate::resource::{
     Buffer, BufferKind, Device, ShaderLibrary, VertexAttribute, VertexDescriptor,
 };
@@ -26,12 +26,12 @@ use std::cell::RefCell;
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2::{msg_send, MainThreadMarker};
+use objc2::{MainThreadMarker, msg_send};
 
 use glam::{Mat4, Vec3};
 
 use objc2_foundation::{
-    ns_string, NSDate, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL,
+    NSDate, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL, ns_string,
 };
 
 use objc2_app_kit::{
@@ -438,22 +438,19 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
     let cube_mesh = create_cube_mesh(&device);
 
     // Create skybox pass
-    let skybox = SkyboxPass {
-        pipeline: skybox_pipeline_state,
-        depth_stencil_state: skybox_depth_state,
-        cube_mesh,
-        cube_texture,
-    };
+    // let skybox = SkyboxPass {
+    //     pipeline: skybox_pipeline_state,
+    //     depth_stencil_state: skybox_depth_state,
+    //     cube_mesh,
+    //     cube_texture,
+    // };
 
-    let skyb = Skybox {
-        mesh: cube_mesh,
-        texture: cube_texture,
-    };
+    // let skyb = Skybox {
+    //     mesh: cube_mesh,
+    //     texture: cube_texture,
+    // };
 
-    let world = World {
-        meshes: all_meshes,
-        skybox: Some(skyb),
-    };
+    let world = World { meshes: all_meshes };
 
     // create
     let app_state = AppState {
@@ -464,7 +461,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         },
         world: Box::new(world),
         camera: RefCell::new(camera),
-        passes: vec![Box::new(pass), Box::new(skybox)],
+        passes: vec![Box::new(pass)],
     };
     (app_state, window, view)
 }
@@ -570,7 +567,7 @@ pub fn frame(view: &MTKView, state: &AppState) {
     //state.skybox.render(&encoder, skybox_view_proj);
 
     for pass in &state.passes {
-        pass.render(&state.world, &state.camera, encoder);
+        pass.render(&state.world, &camera, &encoder);
     }
 
     encoder.endEncoding();

@@ -1,4 +1,4 @@
-use glam::Vec3;
+use glam::{Mat4, Vec3};
 
 pub struct Camera {
     pub position: Vec3,
@@ -17,5 +17,11 @@ impl Camera {
             yaw,
             pitch,
         }
+    }
+
+    pub fn view_proj(&self, fov: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
+        let view = Mat4::look_at_rh(self.position, self.position + self.front, self.up);
+        let projection = Mat4::perspective_rh(fov.to_radians(), aspect, near, far);
+        projection * view
     }
 }
