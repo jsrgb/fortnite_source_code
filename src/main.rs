@@ -7,18 +7,17 @@ mod render;
 mod resource;
 mod world;
 
-// TODO: What?
-use objc2::AnyThread;
 use objc2::runtime::AnyObject;
+use objc2::AnyThread;
 
 use crate::camera::Camera;
 use crate::input::Key;
 use crate::platform::{Delegate, Ivars};
-use crate::render::{Asset, Mesh, RenderPass, SinglePass, SkyboxPass, Uniforms, create_cube_mesh};
+use crate::render::{create_cube_mesh, Mesh, RenderPass, SinglePass, SkyboxPass};
 use crate::resource::{
     Buffer, BufferKind, Device, ShaderLibrary, VertexAttribute, VertexDescriptor,
 };
-use crate::world::{Skybox, World};
+use crate::world::World;
 
 use objc2::MainThreadOnly;
 
@@ -26,12 +25,12 @@ use std::cell::RefCell;
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2::{MainThreadMarker, msg_send};
+use objc2::{msg_send, MainThreadMarker};
 
 use glam::{Mat4, Vec3};
 
 use objc2_foundation::{
-    NSDate, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL, ns_string,
+    ns_string, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL,
 };
 
 use objc2_app_kit::{
@@ -45,10 +44,9 @@ use objc2_metal_kit::{MTKTextureLoader, MTKTextureLoaderOptionAllocateMipmaps, M
 const WINDOW_W: f64 = 800.0;
 const WINDOW_H: f64 = 600.0;
 
-const GLTF_NAME: &str = "Sponza";
+const GLTF_NAME: &str = "DamagedHelmet";
 
 pub struct AppState {
-    start_date: Retained<NSDate>,
     pub device: Device,
     // RefCell? In frame() an immutable reference to AppState is passed in.
     // But camera state needs to mutate when input is pressed
@@ -92,7 +90,6 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         mtk_view
     };
 
-    // TODO: move to resource.rs
     let pipeline_descriptor = MTLRenderPipelineDescriptor::new();
     unsafe {
         pipeline_descriptor
@@ -282,6 +279,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 
     // TODO: Move to resource module
     // A MTLVertexDescriptor has attributes and layouts
+    // Mesh vertex descriptor
     let vertex_descriptor = VertexDescriptor::new(vec![
         VertexAttribute {
             format: MTLVertexFormat::Float3,
@@ -303,20 +301,23 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         },
     ]);
 
-    // Attached vertex spec to pipeline
     pipeline_descriptor.setVertexDescriptor(Some(&vertex_descriptor));
 
     let pipeline_state = device
         .newRenderPipelineStateWithDescriptor_error(&pipeline_descriptor)
         .expect("Failed to create pipeline state");
 
-    let cam_position = Vec3::new(0.0, 10.0, 0.0);
+    let cam_position = Vec3::new(0.0, 0.0, 2.0);
     let camera = Camera::new(
         cam_position,
         Vec3::new(0.0, 0.0, -1.0), // front, Looking at -Z
         Vec3::new(0.0, 1.0, 0.0),  // up
         -90.0,                     // yaw
         0.0,                       // pitch
+        60.0,                      // fov
+        800.0 / 600.0,             // aspect
+        0.025,                     // near
+        8000.0,                    //far
     );
 
     let pass = SinglePass {
@@ -324,35 +325,22 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         depth_stencil_state,
     };
 
-    // ===== Skybox initialization =====
-
-    // Load skybox shader using existing helper
     let skybox_shader_lib = ShaderLibrary::new(
         String::from("Skybox shader library"),
         String::from("./src/shaders/skybox.metallib"),
         &device,
     );
 
-    // Create skybox vertex descriptor (only position attribute)
-    let skybox_vertex_descriptor = MTLVertexDescriptor::new();
-    unsafe {
-        let attr = skybox_vertex_descriptor
-            .attributes()
-            .objectAtIndexedSubscript(0);
-        attr.setFormat(MTLVertexFormat::Float3);
-        attr.setOffset(0);
-        attr.setBufferIndex(1);
+    let skybox_vertex_descriptor = VertexDescriptor::new(vec![VertexAttribute {
+        format: MTLVertexFormat::Float3,
+        offset: 0,
+        index: 0,
+        buffer_id: 1,
+    }]);
 
-        let layout = skybox_vertex_descriptor
-            .layouts()
-            .objectAtIndexedSubscript(1);
-        layout.setStride(12); // 3 floats * 4 bytes
-        layout.setStepFunction(MTLVertexStepFunction::PerVertex);
-        layout.setStepRate(1);
-    }
-
-    // Create skybox pipeline
     let skybox_pipeline_descriptor = MTLRenderPipelineDescriptor::new();
+    skybox_pipeline_descriptor.setVertexDescriptor(Some(&skybox_vertex_descriptor));
+
     unsafe {
         skybox_pipeline_descriptor
             .colorAttachments()
@@ -368,7 +356,6 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         .newRenderPipelineStateWithDescriptor_error(&skybox_pipeline_descriptor)
         .expect("Failed to create skybox pipeline state");
 
-    // Create skybox depth stencil state (depth write disabled)
     let skybox_depth_descriptor = MTLDepthStencilDescriptor::new();
     skybox_depth_descriptor.setDepthCompareFunction(MTLCompareFunction::LessEqual);
     skybox_depth_descriptor.setDepthWriteEnabled(false); // Don't write depth for skybox
@@ -392,10 +379,10 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
             .newTextureWithDescriptor(&texture_descriptor)
             .expect("Failed to create cube texture");
 
-        // Load each face
-        let face_names = ["posx", "negx", "posy", "negy", "posz", "negz"];
+        // TODO: CLean up
+        let face_names = ["left", "right", "top", "bottom", "back", "front"];
         for (slice, name) in face_names.iter().enumerate() {
-            let texture_path = format!("./assets/skybox/Maskonaive/{}.jpg", name);
+            let texture_path = format!("./assets/skybox/water_scene/{}.jpg", name);
             let path = NSString::from_str(&texture_path);
             let url = NSURL::fileURLWithPath(&path);
 
@@ -405,7 +392,6 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
                     .expect(&format!("Failed to load skybox texture: {}", name))
             };
 
-            // Copy to cube texture slice
             let blit_command_buffer = command_queue
                 .commandBuffer()
                 .expect("Failed to create blit command buffer");
@@ -434,34 +420,23 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         cube_tex
     };
 
-    // Create cube mesh
-    let cube_mesh = create_cube_mesh(&device);
-
-    // Create skybox pass
-    // let skybox = SkyboxPass {
-    //     pipeline: skybox_pipeline_state,
-    //     depth_stencil_state: skybox_depth_state,
-    //     cube_mesh,
-    //     cube_texture,
-    // };
-
-    // let skyb = Skybox {
-    //     mesh: cube_mesh,
-    //     texture: cube_texture,
-    // };
+    let skybox = SkyboxPass {
+        pipeline: skybox_pipeline_state,
+        depth_stencil_state: skybox_depth_state,
+        cube_mesh: create_cube_mesh(&device),
+        cube_texture,
+    };
 
     let world = World { meshes: all_meshes };
 
-    // create
     let app_state = AppState {
-        start_date: NSDate::now(),
         device: Device {
             device,
             command_queue,
         },
         world: Box::new(world),
         camera: RefCell::new(camera),
-        passes: vec![Box::new(pass)],
+        passes: vec![Box::new(skybox), Box::new(pass)],
     };
     (app_state, window, view)
 }
@@ -469,7 +444,7 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
 pub fn frame(view: &MTKView, state: &AppState) {
     let mut camera = state.camera.borrow_mut();
 
-    let move_speed = 4.0;
+    let move_speed = 0.3;
 
     let direction = Vec3::new(
         f32::cos(f32::to_radians(camera.yaw)) * f32::cos(f32::to_radians(camera.pitch)),
@@ -481,8 +456,6 @@ pub fn frame(view: &MTKView, state: &AppState) {
     let right = front.cross(camera.up).normalize();
     let up = camera.up;
 
-    // TODO: add a tiny event queue? :)
-    //
     if Key::W.is_pressed() {
         camera.position += front * move_speed;
     }
@@ -537,34 +510,6 @@ pub fn frame(view: &MTKView, state: &AppState) {
     let Some(encoder) = command_buffer.renderCommandEncoderWithDescriptor(&pass_desc) else {
         return;
     };
-
-    // https://learnopengl.com/Getting-started/Camera
-    let aspect_ratio = WINDOW_W as f32 / WINDOW_H as f32;
-    let projection = glam::Mat4::perspective_rh(
-        f32::to_radians(60.0),
-        aspect_ratio,
-        0.025,  // near plane
-        8000.0, // far plane
-    );
-
-    // Update camera uniform
-    let view = Mat4::look_at_rh(camera.position, camera.position + camera.front, camera.up);
-    let view_proj = projection * view;
-    let time = state.start_date.timeIntervalSinceNow() as f32;
-
-    let model = Mat4::ZERO;
-    let uniforms = Uniforms {
-        view_proj,
-        time,
-        model,
-    };
-
-    // Render skybox first (before scene, with depth write disabled)
-    // Remove translation from view matrix so skybox stays centered on camera
-    let (_, rotation, _) = view.to_scale_rotation_translation();
-    let view_no_translation = Mat4::from_quat(rotation);
-    let skybox_view_proj = projection * view_no_translation;
-    //state.skybox.render(&encoder, skybox_view_proj);
 
     for pass in &state.passes {
         pass.render(&state.world, &camera, &encoder);

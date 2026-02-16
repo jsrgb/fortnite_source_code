@@ -42,14 +42,13 @@ impl RenderPass for SinglePass {
         encoder.setRenderPipelineState(&self.pipeline);
         encoder.setDepthStencilState(Some(&self.depth_stencil_state));
 
-        let view_proj = camera.view_proj(60.0, 800.0 / 600.0, 0.025, 8000.0);
+        let view_proj = camera.view_proj();
 
         for mesh in &world.meshes {
-            // Build per-mesh uniforms (model matrix differs per mesh)
             let uniforms = Uniforms {
                 view_proj,
                 model: mesh.model,
-                time: 0.0, // TODO: pass time if needed
+                time: 0.0,
             };
 
             unsafe {
@@ -60,7 +59,6 @@ impl RenderPass for SinglePass {
                 );
             }
 
-            // Bind texture if mesh has one
             for material in &mesh.materials {
                 unsafe {
                     encoder.setFragmentTexture_atIndex(material.as_ref().map(|t| &**t), 0);
@@ -72,74 +70,6 @@ impl RenderPass for SinglePass {
     }
 }
 
-// impl RenderPass for SinglePass {
-//     fn render(
-//         &self,
-//         world: &World,
-//         _camera: &Camera,
-//         encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
-//     ) {
-//         encoder.setRenderPipelineState(&self.pipeline);
-//         encoder.setDepthStencilState(Some(&self.depth_stencil_state));
-//         // Draw sky box
-//         // Draw meshes
-//         // upload camera unit
-//         for mesh in &world.meshes {
-//             mesh.draw(encoder);
-//         }
-//     }
-// }
-
-// impl SinglePass {
-//     pub fn new(
-//         pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
-//         depth_stencil_state: Retained<ProtocolObject<dyn MTLDepthStencilState>>,
-//     ) -> Self {
-//         Self {
-//             pipeline,
-//             depth_stencil_state,
-//         }
-//     }
-// }
-
-// impl RenderPass for SinglePass {
-//     fn render(
-//         &self,
-//         encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
-//         uniforms: &Uniforms,
-//         model: &Asset,
-//     ) {
-//         encoder.setRenderPipelineState(&self.pipeline);
-//         encoder.setDepthStencilState(Some(&self.depth_stencil_state));
-
-//         for mesh in &model.meshes {
-//             unsafe {
-//                 // uplaod uniforms
-//                 let m_uniforms = Uniforms {
-//                     view_proj: uniforms.view_proj,
-//                     time: uniforms.time,
-//                     model: mesh.model,
-//                 };
-//                 encoder.setVertexBytes_length_atIndex(
-//                     NonNull::from(&m_uniforms).cast(),
-//                     std::mem::size_of_val(&m_uniforms),
-//                     0,
-//                 );
-//             }
-//             unsafe {
-//                 for material in &mesh.materials {
-//                     if let Some(texture) = material {
-//                         encoder.setFragmentTexture_atIndex(Some(texture), 0);
-//                     } else {
-//                         encoder.setFragmentTexture_atIndex(None, 0);
-//                     }
-//                 }
-//             }
-//             mesh.draw(encoder);
-//         }
-//     }
-// }
-
 pub struct SkyboxPass {
     pub pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     pub depth_stencil_state: Retained<ProtocolObject<dyn MTLDepthStencilState>>,
@@ -147,53 +77,41 @@ pub struct SkyboxPass {
     pub cube_texture: Retained<ProtocolObject<dyn MTLTexture>>,
 }
 
-// impl RenderPass for SkyboxPass {
-//     fn render(
-//         &self,
-//         encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
-//         uniforms: &Uniforms,
-//         model: &Asset,
-//     ) {
-//     }
-// }
+impl RenderPass for SkyboxPass {
+    fn render(
+        &self,
+        _world: &World,
+        camera: &Camera,
+        encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+    ) {
+        encoder.setRenderPipelineState(&self.pipeline);
+        encoder.setDepthStencilState(Some(&self.depth_stencil_state));
 
-// impl SkyboxPass {
-//     pub fn new(
-//         pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
-//         depth_stencil_state: Retained<ProtocolObject<dyn MTLDepthStencilState>>,
-//         cube_mesh: Mesh,
-//         cube_texture: Retained<ProtocolObject<dyn MTLTexture>>,
-//     ) -> Self {
-//         Self {
-//             pipeline,
-//             depth_stencil_state,
-//             cube_mesh,
-//             cube_texture,
-//         }
-//     }
+        let view = Mat4::look_at_rh(camera.position, camera.position + camera.front, camera.up);
+        let (_, rotation, _) = view.to_scale_rotation_translation();
+        let view_no_translation = Mat4::from_quat(rotation);
+        let projection = Mat4::perspective_rh(f32::to_radians(60.0), 800.0 / 600.0, 0.025, 8000.0);
+        let view_proj = projection * view_no_translation;
 
-//     pub fn render(&self, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>, view_proj: Mat4) {
-//         encoder.setRenderPipelineState(&self.pipeline);
-//         encoder.setDepthStencilState(Some(&self.depth_stencil_state));
+        let uniforms = Uniforms {
+            view_proj,
+            model: Mat4::IDENTITY,
+            time: 0.0,
+        };
 
-//         // Set the view-projection matrix
-//         unsafe {
-//             encoder.setVertexBytes_length_atIndex(
-//                 NonNull::from(&view_proj).cast(),
-//                 std::mem::size_of_val(&view_proj),
-//                 0,
-//             );
-//         }
+        unsafe {
+            encoder.setVertexBytes_length_atIndex(
+                NonNull::from(&uniforms).cast(),
+                std::mem::size_of::<Uniforms>(),
+                0,
+            );
 
-//         // Set the cube texture
-//         unsafe {
-//             encoder.setFragmentTexture_atIndex(Some(&self.cube_texture), 0);
-//         }
+            encoder.setFragmentTexture_atIndex(Some(&self.cube_texture), 0);
+        }
 
-//         // Draw the cube
-//         self.cube_mesh.draw(encoder);
-//     }
-// }
+        self.cube_mesh.draw(encoder);
+    }
+}
 
 // Mesh, Asset, should be omved somewhere else. leave this file for MTL resources
 pub struct Mesh {
@@ -245,15 +163,6 @@ impl Mesh {
     }
 }
 
-// i.e. glTF
-pub struct Asset {
-    // TODO: constructors
-    pub meshes: Vec<Mesh>,
-    // TODO: materials
-    pub _name: String,
-}
-
-// Create a cube mesh for skybox rendering
 pub fn create_cube_mesh(device: &Retained<ProtocolObject<dyn MTLDevice>>) -> Mesh {
     // Cube vertices (8 corners, size 1.0, centered at origin)
     #[rustfmt::skip]
@@ -286,7 +195,6 @@ pub fn create_cube_mesh(device: &Retained<ProtocolObject<dyn MTLDevice>>) -> Mes
         4, 0, 3,  4, 3, 7,
     ];
 
-    // Create position buffer
     let position_buffer = unsafe {
         device
             .newBufferWithBytes_length_options(

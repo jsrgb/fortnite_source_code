@@ -15,7 +15,6 @@ pub enum BufferKind {
 
 pub struct Buffer {
     pub buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
-    // NOTE: bindless coming soon
     pub binding: BufferKind,
 }
 
@@ -83,32 +82,45 @@ pub struct VertexDescriptor {
     pub attributes: Vec<VertexAttribute>,
 }
 
+fn format_size(format: MTLVertexFormat) -> u8 {
+    match format {
+        MTLVertexFormat::Float => 4,
+        MTLVertexFormat::Float2 => 8,
+        MTLVertexFormat::Float3 => 12,
+        MTLVertexFormat::Float4 => 16,
+        _ => panic!("Unhandled vertex format"),
+    }
+}
+
 impl VertexDescriptor {
     pub fn new(attributes: Vec<VertexAttribute>) -> Retained<MTLVertexDescriptor> {
-        let _desc = MTLVertexDescriptor::new();
+        let desc = MTLVertexDescriptor::new();
+
+        let mut stride: u8 = 0;
 
         unsafe {
-            for attr in attributes {
-                let a = _desc
+            for attr in &attributes {
+                let a = desc
                     .attributes()
                     .objectAtIndexedSubscript(attr.index as NSUInteger);
                 a.setFormat(attr.format);
                 a.setOffset(attr.offset as NSUInteger);
                 a.setBufferIndex(attr.buffer_id as NSUInteger);
 
-                // TODO: track stride here
+                let end = attr.offset + format_size(attr.format);
+                if end > stride {
+                    stride = end;
+                }
             }
         }
 
-        let stride = std::mem::size_of::<[f32; 8]>() as NSUInteger;
-
         unsafe {
-            let layout = _desc.layouts().objectAtIndexedSubscript(1);
-            layout.setStride(stride);
+            let layout = desc.layouts().objectAtIndexedSubscript(1);
+            layout.setStride(stride as NSUInteger);
             layout.setStepFunction(MTLVertexStepFunction::PerVertex);
             layout.setStepRate(1);
         }
 
-        return _desc;
+        desc
     }
 }
