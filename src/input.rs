@@ -18,6 +18,7 @@ pub enum Key {
     C = 8,
     R = 15,
     F = 3,
+    ESC = 53,
 }
 
 impl Key {

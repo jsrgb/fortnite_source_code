@@ -1,6 +1,6 @@
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_foundation::{ns_string, NSString, NSUInteger, NSURL};
+use objc2_foundation::{NSString, NSUInteger, NSURL, ns_string};
 use objc2_metal::*;
 
 pub struct Device {
@@ -78,9 +78,7 @@ pub struct VertexAttribute {
     pub buffer_id: u8,
 }
 
-pub struct VertexDescriptor {
-    pub attributes: Vec<VertexAttribute>,
-}
+pub struct VertexDescriptor {}
 
 fn format_size(format: MTLVertexFormat) -> u8 {
     match format {

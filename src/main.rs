@@ -7,55 +7,34 @@ mod render;
 mod resource;
 mod world;
 
-use objc2::runtime::AnyObject;
-use objc2::AnyThread;
+use std::cell::Cell;
 
 use crate::camera::Camera;
 use crate::input::Key;
-use crate::platform::{Delegate, Ivars};
-use crate::render::{create_cube_mesh, Mesh, RenderPass, SinglePass, SkyboxPass};
+use crate::platform::{AppState, Delegate, Ivars};
+use crate::render::{create_cube_mesh, Mesh, SinglePass, SkyboxPass};
 use crate::resource::{
     Buffer, BufferKind, Device, ShaderLibrary, VertexAttribute, VertexDescriptor,
 };
-use crate::world::World;
-
-use objc2::MainThreadOnly;
-
-use std::cell::RefCell;
+use crate::world::{World, GLTF_NAME, WINDOW_H, WINDOW_W};
 
 use objc2::rc::Retained;
+use objc2::runtime::AnyObject;
 use objc2::runtime::ProtocolObject;
+use objc2::AnyThread;
+use objc2::MainThreadOnly;
 use objc2::{msg_send, MainThreadMarker};
+use std::cell::RefCell;
 
 use glam::{Mat4, Vec3};
-
-use objc2_foundation::{
-    ns_string, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL,
-};
-
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSWindow, NSWindowStyleMask,
 };
-
+use objc2_foundation::{
+    ns_string, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSUInteger, NSURL,
+};
 use objc2_metal::*;
-
 use objc2_metal_kit::{MTKTextureLoader, MTKTextureLoaderOptionAllocateMipmaps, MTKView};
-
-const WINDOW_W: f64 = 800.0;
-const WINDOW_H: f64 = 600.0;
-
-const GLTF_NAME: &str = "DamagedHelmet";
-
-pub struct AppState {
-    pub device: Device,
-    // RefCell? In frame() an immutable reference to AppState is passed in.
-    // But camera state needs to mutate when input is pressed
-    // RefCell allows for mutable borrows at runtime, even when the data is immutable
-    // Maybe move out of app state
-    world: Box<World>,
-    camera: RefCell<Camera>,
-    passes: Vec<Box<dyn RenderPass>>,
-}
 
 pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
     let mtm = MainThreadMarker::new().unwrap();
@@ -150,7 +129,6 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
         .blitCommandEncoder()
         .expect("Failed to create mipmap blit encoder");
 
-    // FIXME: This is kind of horible
     for mesh in document.meshes() {
         for primitive in mesh.primitives() {
             let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
@@ -392,15 +370,15 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
                     .expect(&format!("Failed to load skybox texture: {}", name))
             };
 
-            let blit_command_buffer = command_queue
+            let skybox_command_buffer = command_queue
                 .commandBuffer()
                 .expect("Failed to create blit command buffer");
-            let blit_encoder = blit_command_buffer
+            let skybox_encoder = skybox_command_buffer
                 .blitCommandEncoder()
                 .expect("Failed to create blit encoder");
 
             unsafe {
-                blit_encoder.copyFromTexture_sourceSlice_sourceLevel_toTexture_destinationSlice_destinationLevel_sliceCount_levelCount(
+                skybox_encoder.copyFromTexture_sourceSlice_sourceLevel_toTexture_destinationSlice_destinationLevel_sliceCount_levelCount(
                     &temp_texture,
                     0,
                     0,
@@ -412,9 +390,9 @@ pub fn init() -> (AppState, Retained<NSWindow>, Retained<MTKView>) {
                 );
             }
 
-            blit_encoder.endEncoding();
-            blit_command_buffer.commit();
-            blit_command_buffer.waitUntilCompleted();
+            skybox_encoder.endEncoding();
+            skybox_command_buffer.commit();
+            skybox_command_buffer.waitUntilCompleted();
         }
 
         cube_tex
@@ -489,6 +467,12 @@ pub fn frame(view: &MTKView, state: &AppState) {
     }
     if Key::R.is_pressed() {
         camera.pitch += pitch_sens;
+    }
+
+    if Key::ESC.is_pressed() {
+        let mtm = MainThreadMarker::new().unwrap();
+        let app = NSApplication::sharedApplication(mtm);
+        app.terminate(None);
     }
 
     if camera.pitch > 89.0 {
