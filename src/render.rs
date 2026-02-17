@@ -1,11 +1,14 @@
-use glam::{Mat4, Vec3};
+use glam::Mat4;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_foundation::{ns_string, NSString, NSUInteger, NSURL};
+use objc2_foundation::NSUInteger;
 use objc2_metal::*;
 use std::ptr::NonNull;
 
 use crate::resource::{Buffer, BufferKind};
+
+use crate::camera::Camera;
+use crate::world::World;
 
 #[derive(Copy, Clone)]
 #[repr(C)]
@@ -16,70 +19,97 @@ pub struct Uniforms {
 }
 
 pub trait RenderPass {
-    // TODO: make Generic
     fn render(
         &self,
+        world: &World,
+        camera: &Camera,
         encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
-        uniforms: &Uniforms,
-        model: &Asset,
-        time: f32,
     );
 }
 
-// The pass owns the resources
 pub struct SinglePass {
-    pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
-    depth_stencil_state: Retained<ProtocolObject<dyn MTLDepthStencilState>>,
-}
-
-impl SinglePass {
-    pub fn new(
-        pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
-        depth_stencil_state: Retained<ProtocolObject<dyn MTLDepthStencilState>>,
-    ) -> Self {
-        Self {
-            pipeline,
-            depth_stencil_state,
-        }
-    }
+    pub pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    pub depth_stencil_state: Retained<ProtocolObject<dyn MTLDepthStencilState>>,
 }
 
 impl RenderPass for SinglePass {
     fn render(
         &self,
+        world: &World,
+        camera: &Camera,
         encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
-        uniforms: &Uniforms,
-        model: &Asset,
-        time: f32,
     ) {
         encoder.setRenderPipelineState(&self.pipeline);
         encoder.setDepthStencilState(Some(&self.depth_stencil_state));
 
-        for mesh in &model.meshes {
+        let view_proj = camera.view_proj();
+
+        for mesh in &world.meshes {
+            let uniforms = Uniforms {
+                view_proj,
+                model: mesh.model,
+                time: 0.0,
+            };
+
             unsafe {
-                // uplaod uniforms
-                let m_uniforms = Uniforms {
-                    view_proj: uniforms.view_proj,
-                    time: uniforms.time,
-                    model: mesh.model,
-                };
                 encoder.setVertexBytes_length_atIndex(
-                    NonNull::from(&m_uniforms).cast(),
-                    std::mem::size_of_val(&m_uniforms),
+                    NonNull::from(&uniforms).cast(),
+                    std::mem::size_of::<Uniforms>(),
                     0,
                 );
             }
-            unsafe {
-                for material in &mesh.materials {
-                    if let Some(texture) = material {
-                        encoder.setFragmentTexture_atIndex(Some(texture), 0);
-                    } else {
-                        encoder.setFragmentTexture_atIndex(None, 0);
-                    }
+
+            for material in &mesh.materials {
+                unsafe {
+                    encoder.setFragmentTexture_atIndex(material.as_ref().map(|t| &**t), 0);
                 }
             }
+
             mesh.draw(encoder);
         }
+    }
+}
+
+pub struct SkyboxPass {
+    pub pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    pub depth_stencil_state: Retained<ProtocolObject<dyn MTLDepthStencilState>>,
+    pub cube_mesh: Mesh,
+    pub cube_texture: Retained<ProtocolObject<dyn MTLTexture>>,
+}
+
+impl RenderPass for SkyboxPass {
+    fn render(
+        &self,
+        _world: &World,
+        camera: &Camera,
+        encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+    ) {
+        encoder.setRenderPipelineState(&self.pipeline);
+        encoder.setDepthStencilState(Some(&self.depth_stencil_state));
+
+        let view = Mat4::look_at_rh(camera.position, camera.position + camera.front, camera.up);
+        let (_, rotation, _) = view.to_scale_rotation_translation();
+        let view_no_translation = Mat4::from_quat(rotation);
+        let projection = Mat4::perspective_rh(f32::to_radians(60.0), 800.0 / 600.0, 0.025, 8000.0);
+        let view_proj = projection * view_no_translation;
+
+        let uniforms = Uniforms {
+            view_proj,
+            model: Mat4::IDENTITY,
+            time: 0.0,
+        };
+
+        unsafe {
+            encoder.setVertexBytes_length_atIndex(
+                NonNull::from(&uniforms).cast(),
+                std::mem::size_of::<Uniforms>(),
+                0,
+            );
+
+            encoder.setFragmentTexture_atIndex(Some(&self.cube_texture), 0);
+        }
+
+        self.cube_mesh.draw(encoder);
     }
 }
 
@@ -133,10 +163,69 @@ impl Mesh {
     }
 }
 
-// i.e. glTF
-pub struct Asset {
-    // TODO: constructors
-    pub meshes: Vec<Mesh>,
-    // TODO: materials
-    pub name: String,
+pub fn create_cube_mesh(device: &Retained<ProtocolObject<dyn MTLDevice>>) -> Mesh {
+    // Cube vertices (8 corners, size 1.0, centered at origin)
+    #[rustfmt::skip]
+    let positions: [f32; 24] = [
+        -1.0,  1.0,  1.0, // 0: front-top-left
+         1.0,  1.0,  1.0, // 1: front-top-right
+         1.0, -1.0,  1.0, // 2: front-bottom-right
+        -1.0, -1.0,  1.0, // 3: front-bottom-left
+        -1.0,  1.0, -1.0, // 4: back-top-left
+         1.0,  1.0, -1.0, // 5: back-top-right
+         1.0, -1.0, -1.0, // 6: back-bottom-right
+        -1.0, -1.0, -1.0, // 7: back-bottom-left
+    ];
+
+    // 36 indices for 12 triangles (2 per face, 6 faces)
+    // Winding order is set to render from inside the cube
+    #[rustfmt::skip]
+    let indices: [u32; 36] = [
+        // Front face (Z+)
+        0, 1, 2,  0, 2, 3,
+        // Back face (Z-)
+        5, 4, 7,  5, 7, 6,
+        // Top face (Y+)
+        4, 5, 1,  4, 1, 0,
+        // Bottom face (Y-)
+        3, 2, 6,  3, 6, 7,
+        // Right face (X+)
+        1, 5, 6,  1, 6, 2,
+        // Left face (X-)
+        4, 0, 3,  4, 3, 7,
+    ];
+
+    let position_buffer = unsafe {
+        device
+            .newBufferWithBytes_length_options(
+                NonNull::new(positions.as_ptr() as *mut _).unwrap(),
+                std::mem::size_of_val(&positions),
+                MTLResourceOptions::StorageModeManaged,
+            )
+            .expect("Failed to create position buffer")
+    };
+
+    let buffer = Buffer {
+        buffer: position_buffer,
+        binding: BufferKind::POSITIONS,
+    };
+
+    let index_buffer = unsafe {
+        device
+            .newBufferWithBytes_length_options(
+                NonNull::new(indices.as_ptr() as *mut _).unwrap(),
+                std::mem::size_of_val(&indices),
+                MTLResourceOptions::StorageModeManaged,
+            )
+            .expect("Failed to create index buffer")
+    };
+
+    Mesh::new(
+        vec![buffer],
+        index_buffer,
+        vec![],
+        indices.len(),
+        MTLPrimitiveType::Triangle,
+        Mat4::IDENTITY,
+    )
 }

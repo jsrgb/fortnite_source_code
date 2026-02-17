@@ -1,9 +1,14 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use crate::{AppState, frame, init};
+use crate::{frame, init};
+use std::cell::Cell;
 use std::ptr;
 
+use crate::camera::Camera;
 use crate::input::KEYSTATE;
+use crate::render::RenderPass;
+use crate::resource::Device;
+use crate::world::World;
 
 use objc2::DefinedClass;
 
@@ -20,6 +25,16 @@ use objc2_metal_kit::{MTKView, MTKViewDelegate};
 
 use block2::RcBlock;
 
+pub struct AppState {
+    pub device: Device,
+    // RefCell? In frame() an immutable reference to AppState is passed in.
+    // But camera state needs to mutate when input is pressed
+    // RefCell allows for mutable borrows at runtime, even when the data is immutable
+    // Maybe move out of app state
+    pub world: Box<World>,
+    pub camera: RefCell<Camera>,
+    pub passes: Vec<Box<dyn RenderPass>>,
+}
 
 pub struct Ivars {
     pub state: RefCell<Option<AppState>>,
